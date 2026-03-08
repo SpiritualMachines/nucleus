@@ -9,6 +9,14 @@ designed to support a future web frontend.
 
 ---
 
+## Screenshots
+
+<img src="screenshots/LoginScreen.png" alt="Login Screen" width="800"/>
+<img src="screenshots/ProfileScreen.png" alt="Member Profile" width="800"/>
+<img src="screenshots/StaffToolsScreen.png" alt="Staff Tools" width="800"/>
+
+---
+
 ## Features
 
 - Member registration, approval, and profile management
