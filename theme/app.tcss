@@ -1,0 +1,227 @@
+/* --- Global Styles --- */
+App {
+    background: $surface;
+    color: $text;
+}
+
+/* --- Shared Screen Backgrounds (The Hashes) --- */
+LoginScreen,
+RegisterScreen,
+PolicyScreen,
+ChangePasswordScreen,
+EditProfileScreen,
+StaffConfirmScreen,
+DirectorySelectScreen,
+DatabaseLockModal {
+    align: center middle;
+    hatch: right $secondary 20%;
+    background: $surface;
+}
+
+/* --- Content Containers --- */
+
+/* Small centered box (Login, Change Password) */
+.login-container {
+    width: 60;
+    height: auto;
+    border: heavy $primary;
+    background: $boost;
+    padding: 2;
+    align: center middle;
+}
+
+/* Medium/Large Form Box (Registration) */
+.form-container {
+    width: 80;
+    max-width: 120;
+    height: auto;
+    max-height: 90%;
+    border: heavy $primary;
+    background: $surface;
+    padding: 1 2;
+    align: center top;
+}
+
+/* Large Splash Dialog (Policies, Edit Profile, Staff Confirm) */
+.splash-container {
+    width: 80%;
+    height: auto;
+    max-height: 80%;
+    background: $surface;
+    border: heavy $primary;
+    padding: 2;
+}
+
+/* Inner content box for Splash Dialogs */
+.splash-content {
+    height: 1fr; /* Takes up remaining vertical space */
+    border: solid $secondary;
+    background: $boost;
+    padding: 1;
+    margin: 1 0;
+}
+
+/* Default Directory Tree */
+DirectoryTree {
+    height: 20;
+    border: solid $secondary;
+    margin: 1 0;
+    background: $boost;
+}
+
+/* --- Buttons --- */
+Button {
+    width: auto;
+    min-width: 20;
+    height: auto;
+    content-align: center middle;
+    padding: 1 2;
+    margin: 1 0;
+    background: $primary;
+    color: $text;
+    border: none;
+}
+
+/* Force main action buttons to be full width */
+.login-container > Button,
+.form-container > Button {
+    width: 100%;
+}
+
+#read_tos, #read_coc {
+    background: $surface;
+    border: tall $primary;
+    color: $text;
+    width: auto;
+}
+
+Button.success {
+    background: $success;
+    color: black;
+}
+
+Button.error {
+    background: $error;
+    color: white;
+}
+
+/* --- Filters --- */
+.filter-row {
+    height: auto;
+    margin: 1 0;
+    align-vertical: middle;
+}
+
+Checkbox {
+    width: auto;
+    margin-right: 2;
+}
+
+/* --- Text & Misc --- */
+.logo-art {
+    width: 100%;
+    text-align: center;
+    color: $secondary;
+    margin: 1 0 1 0;
+    text-style: dim;
+}
+
+/* Login screen header — two stacked lines with no gap between them */
+.login-hackspace-name {
+    text-align: center;
+    text-style: bold;
+    color: $secondary;
+    width: 100%;
+}
+
+.login-app-name {
+    text-align: center;
+    color: $text-muted;
+    width: 100%;
+    margin-bottom: 1;
+}
+
+.title {
+    text-align: center;
+    text-style: bold;
+    color: $secondary;
+    margin-bottom: 2;
+    width: 100%;
+}
+
+.subtitle {
+    text-style: bold;
+    margin-top: 1;
+    color: $text-muted;
+}
+
+.error {
+    color: $error;
+    text-align: center;
+}
+
+Input {
+    margin: 1;
+    color: $text;
+}
+
+.scrollable {
+    overflow-y: scroll;
+    height: 100%;
+}
+
+.agreement-row {
+    height: auto;
+    align-vertical: middle;
+    margin-bottom: 1;
+}
+
+/* --- Warning Banners --- */
+.warning-banner {
+    width: 100%;
+    background: $error;
+    color: white;
+    text-align: center;
+    text-style: bold;
+    padding: 1;
+    margin-bottom: 1;
+    border-bottom: heavy white;
+}
+
+.hidden {
+    display: none;
+}
+
+/* --- Directory Select Specifics --- */
+
+DirectorySelectScreen .splash-container {
+    height: 80%; /* Fixed height relative to screen */
+    max-height: 80%;
+    layout: vertical; /* Ensure vertical stacking */
+}
+
+/* Ensure the directory tree takes available space but leaves room for buttons */
+DirectorySelectScreen DirectoryTree {
+    height: 1fr;
+    min-height: 10;
+    margin-bottom: 2;
+}
+
+/* Ensure filter row (buttons) stays at bottom */
+DirectorySelectScreen .filter-row {
+    height: auto;
+    dock: bottom;
+}
+
+/* --- Footer Version Label --- */
+.version-footer {
+    width: auto;
+    dock: left;
+    margin-left: 1;
+    color: $text-muted;
+}
+
+.footer-container {
+    height: auto;
+    dock: bottom;
+}

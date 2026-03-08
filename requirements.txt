@@ -1,0 +1,5 @@
+sqlmodel
+textual
+passlib[bcrypt]
+email-validator
+fpdf2
