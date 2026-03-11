@@ -7,6 +7,7 @@ from core import services
 from core.config import settings
 from screens.community_contact import CommunityContactModal
 from screens.dashboard import Dashboard
+from screens.public_purchase import PublicPurchaseModal
 from screens.registration import RegisterScreen
 
 
@@ -35,6 +36,11 @@ class LoginScreen(Screen):
                 variant="default",
                 id="community_btn",
             )
+            yield Button(
+                "Manual Purchase",
+                variant="default",
+                id="manual_purchase_btn",
+            )
             yield Label("", id="error_msg", classes="error")
 
     def on_button_pressed(self, event: Button.Pressed):
@@ -44,6 +50,8 @@ class LoginScreen(Screen):
             self.app.push_screen(RegisterScreen())
         elif event.button.id == "community_btn":
             self.app.push_screen(CommunityContactModal())
+        elif event.button.id == "manual_purchase_btn":
+            self.app.push_screen(PublicPurchaseModal())
 
     def on_input_submitted(self, event: Input.Submitted):
         if event.input.id == "email":

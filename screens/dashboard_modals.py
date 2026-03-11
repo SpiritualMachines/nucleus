@@ -15,7 +15,7 @@ from textual.widgets import (
     Select,
 )
 
-from core import exporters, models, services
+from core import exporters, models, services, square_service
 from core.database import engine
 from screens.directory_select import DirectorySelectScreen
 
@@ -277,20 +277,18 @@ class TransactionModal(ModalScreen):
         self.user_id = user_id
         self.initial_type = initial_type
         self.currency_name = currency_name
+        # Load POS config only for credit type (payment processing)
+        self.square_enabled = False
+        if initial_type == "credit":
+            pos_cfg = square_service.get_pos_config()
+            self.square_enabled = pos_cfg.square_enabled
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="login-container"):
-            yield Label(f"Manage {self.currency_name} Balance", classes="title")
-
-            yield Label("Type:")
-            yield Select(
-                [
-                    (f"Add {self.currency_name} (+)", "credit"),
-                    (f"Spend {self.currency_name} (-)", "debit"),
-                ],
-                value=self.initial_type,
-                id="txn_type",
-            )
+            if self.initial_type == "credit":
+                yield Label(f"Add {self.currency_name}", classes="title")
+            else:
+                yield Label(f"Deduct {self.currency_name}", classes="title")
 
             yield Label("Amount ($):")
             yield Input(placeholder="0.00", type="number", id="txn_amount")
@@ -299,26 +297,91 @@ class TransactionModal(ModalScreen):
             yield Input(placeholder="e.g., 3D Print Filament", id="txn_desc")
 
             with Horizontal(classes="filter-row"):
-                yield Button(
-                    f"Record {self.currency_name}", variant="primary", id="btn_process"
-                )
+                if self.initial_type == "credit":
+                    # For credit: show payment buttons
+                    square_label = (
+                        "Process Square Transaction"
+                        if self.square_enabled
+                        else "Process Transaction (Local)"
+                    )
+                    yield Button(square_label, variant="success", id="btn_pay_square")
+                    yield Button("Record as Cash", variant="warning", id="btn_pay_cash")
+                else:
+                    # For debit: show single record button
+                    yield Button(
+                        f"Record {self.currency_name} Deduction",
+                        variant="primary",
+                        id="btn_process",
+                    )
+            with Horizontal(classes="filter-row"):
                 yield Button("Cancel", id="btn_cancel")
 
     def on_button_pressed(self, event: Button.Pressed):
         if event.button.id == "btn_cancel":
             self.dismiss(False)
         elif event.button.id == "btn_process":
-            self.process_txn()
+            # Debit: single record button
+            self.process_txn(None)
+        elif event.button.id == "btn_pay_square":
+            # Credit: Square payment
+            self.process_txn("square")
+        elif event.button.id == "btn_pay_cash":
+            # Credit: Cash payment
+            self.process_txn("cash")
 
-    def process_txn(self):
+    def process_txn(self, payment_method: str | None):
+        """Process transaction with optional payment processing.
+
+        Args:
+            payment_method: "square", "cash", or None (for debit-only)
+        """
         try:
             amt_str = self.query_one("#txn_amount").value
             amount = float(amt_str)
-            txn_type = self.query_one("#txn_type").value
             desc = self.query_one("#txn_desc").value
 
-            services.add_transaction(self.user_id, amount, txn_type, desc)
-            self.app.notify(f"{self.currency_name} Recorded")
+            # Record the transaction in the database
+            services.add_transaction(self.user_id, amount, self.initial_type, desc)
+
+            # If credit type with payment method, process payment
+            if self.initial_type == "credit" and amount > 0 and payment_method:
+                user = services.get_user_by_account(self.user_id)
+                customer_name = f"{user.first_name} {user.last_name}"
+                customer_email = user.email
+
+                if payment_method == "square":
+                    # Process with Square
+                    try:
+                        square_service.process_terminal_checkout(
+                            amount_cents=int(amount * 100),
+                            customer_name=customer_name,
+                            customer_email=customer_email,
+                            description=desc,
+                        )
+                        self.app.notify(f"{self.currency_name} Added via Square")
+                    except Exception as e:
+                        self.app.notify(f"Square Error: {str(e)}", severity="error")
+                elif payment_method == "cash":
+                    # Record cash payment
+                    try:
+                        square_service.record_cash_payment(
+                            amount_cents=int(amount * 100),
+                            customer_name=customer_name,
+                            customer_email=customer_email,
+                            description=desc,
+                        )
+                        self.app.notify(f"{self.currency_name} Added via Cash")
+                    except Exception as e:
+                        self.app.notify(
+                            f"Cash Recording Error: {str(e)}", severity="error"
+                        )
+            elif self.initial_type == "credit" and amount == 0:
+                self.app.notify("No payment recorded (zero amount)")
+            elif self.initial_type == "debit":
+                self.app.notify(f"{self.currency_name} Deducted")
+            else:
+                self.app.notify(f"{self.currency_name} Recorded")
+
             self.dismiss(True)
         except ValueError:
             self.app.notify("Invalid Amount", severity="error")
@@ -328,6 +391,8 @@ class AddMembershipModal(ModalScreen):
     def __init__(self, user_id: int):
         super().__init__()
         self.user_id = user_id
+        pos_cfg = square_service.get_pos_config()
+        self.square_enabled = pos_cfg.square_enabled
 
     def compose(self) -> ComposeResult:
         today = datetime.now()
@@ -346,57 +411,109 @@ class AddMembershipModal(ModalScreen):
             yield Label("Description / Month:")
             yield Input(current_month_name, id="mem_desc")
 
+            yield Label("Amount ($) (optional):")
+            yield Input(placeholder="0.00", type="number", id="mem_amount")
+
             with Horizontal(classes="filter-row"):
-                yield Button("Add & Activate", variant="success", id="btn_add")
+                square_label = (
+                    "Process Square Transaction"
+                    if self.square_enabled
+                    else "Process Transaction (Local)"
+                )
+                yield Button(square_label, variant="success", id="btn_pay_square")
+                yield Button("Record as Cash", variant="warning", id="btn_pay_cash")
+            with Horizontal(classes="filter-row"):
                 yield Button("Cancel", id="btn_cancel")
 
     def on_button_pressed(self, event: Button.Pressed):
         if event.button.id == "btn_cancel":
             self.dismiss(False)
-        elif event.button.id == "btn_add":
-            try:
-                start_str = self.query_one("#mem_start").value
-                end_str = self.query_one("#mem_end").value
-                desc_str = self.query_one("#mem_desc").value
+        elif event.button.id == "btn_pay_square":
+            self._save_membership("square")
+        elif event.button.id == "btn_pay_cash":
+            self._save_membership("cash")
 
-                start_date = datetime.strptime(start_str, "%Y-%m-%d")
-                end_date = datetime.strptime(end_str, "%Y-%m-%d")
+    def _save_membership(self, payment_method: str):
+        """Save membership and process payment if amount provided.
 
-                # Direct DB Insert to include Description
-                # (services.add_membership doesn't support dates/desc yet)
-                with Session(engine) as session:
-                    # Update User Role
-                    user = session.get(models.User, self.user_id)
-                    if user:
-                        user.role = models.UserRole.MEMBER
-                        session.add(user)
+        Args:
+            payment_method: "square" or "cash"
+        """
+        try:
+            start_str = self.query_one("#mem_start").value
+            end_str = self.query_one("#mem_end").value
+            desc_str = self.query_one("#mem_desc").value
+            amount_str = self.query_one("#mem_amount").value
 
-                    # Create Membership
-                    # We assume ActiveMembership model has 'description' field
-                    # If not, we set it dynamically or it might be ignored by SQLModel
-                    # but we try our best.
-                    mem = models.ActiveMembership(
-                        user_account_number=self.user_id,
-                        start_date=start_date,
-                        end_date=end_date,
-                        description=desc_str,
-                    )
-                    # Force set description if model definition is lagging
-                    # logic: getattr/setattr to be safe
+            start_date = datetime.strptime(start_str, "%Y-%m-%d")
+            end_date = datetime.strptime(end_str, "%Y-%m-%d")
+            amount = float(amount_str) if amount_str else 0.0
+
+            # Direct DB Insert to include Description
+            with Session(engine) as session:
+                # Update User Role
+                user = session.get(models.User, self.user_id)
+                if user:
+                    user.role = models.UserRole.MEMBER
+                    session.add(user)
+
+                # Create Membership
+                mem = models.ActiveMembership(
+                    user_account_number=self.user_id,
+                    start_date=start_date,
+                    end_date=end_date,
+                    description=desc_str,
+                )
+                try:
+                    mem.description = desc_str
+                except Exception:
+                    pass
+
+                session.add(mem)
+                session.commit()
+
+            # Process payment if amount > 0
+            if amount > 0:
+                user_obj = services.get_user_by_account(self.user_id)
+                customer_name = f"{user_obj.first_name} {user_obj.last_name}"
+                customer_email = user_obj.email
+
+                if payment_method == "square":
                     try:
-                        mem.description = desc_str
-                    except Exception:
-                        pass  # Field might not exist on model class
+                        square_service.process_terminal_checkout(
+                            amount_cents=int(amount * 100),
+                            customer_name=customer_name,
+                            customer_email=customer_email,
+                            description=f"Membership: {desc_str}",
+                        )
+                        self.app.notify(
+                            f"Added membership ({desc_str}) - Square payment processed"
+                        )
+                    except Exception as e:
+                        self.app.notify(f"Square Error: {str(e)}", severity="error")
+                elif payment_method == "cash":
+                    try:
+                        square_service.record_cash_payment(
+                            amount_cents=int(amount * 100),
+                            customer_name=customer_name,
+                            customer_email=customer_email,
+                            description=f"Membership: {desc_str}",
+                        )
+                        self.app.notify(
+                            f"Added membership ({desc_str}) - Cash payment recorded"
+                        )
+                    except Exception as e:
+                        self.app.notify(
+                            f"Cash Recording Error: {str(e)}", severity="error"
+                        )
+            else:
+                self.app.notify(f"Added membership ({desc_str}) - No payment recorded")
 
-                    session.add(mem)
-                    session.commit()
-
-                self.app.notify(f"Added membership ({desc_str}).")
-                self.dismiss(True)
-            except ValueError:
-                self.app.notify("Invalid Date Format", severity="error")
-            except Exception as e:
-                self.app.notify(f"Error: {str(e)}", severity="error")
+            self.dismiss(True)
+        except ValueError:
+            self.app.notify("Invalid Date Format or Amount", severity="error")
+        except Exception as e:
+            self.app.notify(f"Error: {str(e)}", severity="error")
 
 
 class ManageMembershipsModal(ModalScreen):
@@ -536,6 +653,8 @@ class AddDayPassModal(ModalScreen):
     def __init__(self, user_id: int):
         super().__init__()
         self.user_id = user_id
+        pos_cfg = square_service.get_pos_config()
+        self.square_enabled = pos_cfg.square_enabled
 
     def compose(self) -> ComposeResult:
         with Vertical(classes="login-container"):
@@ -543,35 +662,89 @@ class AddDayPassModal(ModalScreen):
             yield Label("Date (YYYY-MM-DD):")
             yield Input(datetime.now().strftime("%Y-%m-%d"), id="dp_date")
 
-            # --- NEW FEATURE: NBP Library Checkbox ---
             yield Checkbox("Borrowed NBP Library Day Pass", id="chk_nbp_library")
 
             yield Label("Description:")
             yield Input("Day Pass", id="dp_desc")
 
+            yield Label("Amount ($) (optional):")
+            yield Input(placeholder="0.00", type="number", id="dp_amount")
+
             with Horizontal(classes="filter-row"):
-                yield Button("Add Pass", variant="success", id="btn_add")
+                square_label = (
+                    "Process Square Transaction"
+                    if self.square_enabled
+                    else "Process Transaction (Local)"
+                )
+                yield Button(square_label, variant="success", id="btn_pay_square")
+                yield Button("Record as Cash", variant="warning", id="btn_pay_cash")
+            with Horizontal(classes="filter-row"):
                 yield Button("Cancel", id="btn_cancel")
 
     def on_button_pressed(self, event: Button.Pressed):
         if event.button.id == "btn_cancel":
             self.dismiss(False)
-        elif event.button.id == "btn_add":
-            try:
-                date_str = self.query_one("#dp_date").value
-                desc = self.query_one("#dp_desc").value
+        elif event.button.id == "btn_pay_square":
+            self._save_day_pass("square")
+        elif event.button.id == "btn_pay_cash":
+            self._save_day_pass("cash")
 
-                # --- NEW FEATURE LOGIC ---
-                if self.query_one("#chk_nbp_library").value:
-                    desc = f"[NBP-Library] {desc}"
-                # -------------------------
+    def _save_day_pass(self, payment_method: str):
+        """Save day pass and process payment if amount provided.
 
-                dt = datetime.strptime(date_str, "%Y-%m-%d")
-                services.add_day_pass(self.user_id, dt, desc)
-                self.app.notify("Day Pass Added")
-                self.dismiss(True)
-            except ValueError:
-                self.app.notify("Invalid Date", severity="error")
+        Args:
+            payment_method: "square" or "cash"
+        """
+        try:
+            date_str = self.query_one("#dp_date").value
+            desc = self.query_one("#dp_desc").value
+            amount_str = self.query_one("#dp_amount").value
+
+            if self.query_one("#chk_nbp_library").value:
+                desc = f"[NBP-Library] {desc}"
+
+            dt = datetime.strptime(date_str, "%Y-%m-%d")
+            amount = float(amount_str) if amount_str else 0.0
+
+            # Create the day pass record
+            services.add_day_pass(self.user_id, dt, desc)
+
+            # Process payment if amount > 0
+            if amount > 0:
+                user_obj = services.get_user_by_account(self.user_id)
+                customer_name = f"{user_obj.first_name} {user_obj.last_name}"
+                customer_email = user_obj.email
+
+                if payment_method == "square":
+                    try:
+                        square_service.process_terminal_checkout(
+                            amount_cents=int(amount * 100),
+                            customer_name=customer_name,
+                            customer_email=customer_email,
+                            description=desc,
+                        )
+                        self.app.notify("Day Pass Added - Square payment processed")
+                    except Exception as e:
+                        self.app.notify(f"Square Error: {str(e)}", severity="error")
+                elif payment_method == "cash":
+                    try:
+                        square_service.record_cash_payment(
+                            amount_cents=int(amount * 100),
+                            customer_name=customer_name,
+                            customer_email=customer_email,
+                            description=desc,
+                        )
+                        self.app.notify("Day Pass Added - Cash payment recorded")
+                    except Exception as e:
+                        self.app.notify(
+                            f"Cash Recording Error: {str(e)}", severity="error"
+                        )
+            else:
+                self.app.notify("Day Pass Added - No payment recorded")
+
+            self.dismiss(True)
+        except ValueError:
+            self.app.notify("Invalid Date or Amount", severity="error")
 
 
 class DayPassHistoryModal(ModalScreen):

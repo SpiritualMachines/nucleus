@@ -13,10 +13,14 @@ class AppSetting(SQLModel, table=True):
     """
     Key-value store for admin-configurable application settings.
     Replaces the flat settings.txt file for runtime configuration.
+    When is_sensitive is True, the UI must never display the stored value —
+    it shows a "configured / hidden" placeholder instead and only allows
+    the value to be replaced, never read back.
     """
 
     key: str = Field(primary_key=True)
     value: str = Field(default="")
+    is_sensitive: bool = Field(default=False)
 
 
 class UserPreference(SQLModel, table=True):
@@ -99,6 +103,94 @@ class CommunityContact(SQLModel, table=True):
     visited_at: datetime = Field(default_factory=datetime.now)
     is_community_tour: bool = Field(default=False)
     staff_name: Optional[str] = Field(default=None, sa_column=Column(Text))
+
+    # Demographic and outreach fields added for walk-in visitor research
+    pronouns: Optional[str] = Field(default=None)
+    age_range: Optional[str] = Field(default=None)
+    postal_code: Optional[str] = Field(default=None)
+    how_heard: Optional[str] = Field(default=None)
+
+    # Opt-in preferences — all default to False (no implicit consent)
+    opt_in_updates: bool = Field(default=False)
+    opt_in_volunteer: bool = Field(default=False)
+    opt_in_teaching: bool = Field(default=False)
+
+
+class SquareTransactionStatus(str, Enum):
+    """
+    Lifecycle states for a SquareTransaction record.
+    LOCAL means the transaction was recorded without Square (terminal disabled).
+    All other statuses reflect values returned by the Square Terminal API.
+    """
+
+    LOCAL = "local"
+    CASH = "cash"
+    CASH_SQUARE = "cash_square"
+    PENDING = "pending"
+    IN_PROGRESS = "in_progress"
+    COMPLETED = "completed"
+    CANCELED = "canceled"
+    FAILED = "failed"
+    ERROR = "error"
+
+
+class SquareTransaction(SQLModel, table=True):
+    """
+    Audit record for every manual transaction processed through the Purchases tab.
+    Records are created whether Square Terminal is active or not — when the terminal
+    is disabled, is_local is True and all square_* fields remain null.
+    The square_raw_response field stores the full JSON response from the Square API
+    for audit and reconciliation purposes.
+    Customer fields are entered by staff at the time of the transaction; the record
+    is not required to be linked to a registered user account.
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    created_at: datetime = Field(default_factory=datetime.now)
+    updated_at: datetime = Field(default_factory=datetime.now)
+
+    # Customer info — may not correspond to a registered user account
+    user_account_number: Optional[int] = Field(default=None, index=True)
+    customer_name: str = Field(default="")
+    customer_email: Optional[str] = Field(default=None)
+    customer_phone: Optional[str] = Field(default=None)
+    description: Optional[str] = Field(default=None, sa_column=Column(Text))
+
+    # Financial
+    amount: float = Field(default=0.0)  # stored in dollars
+
+    # Square Terminal API response fields — null when is_local=True
+    square_checkout_id: Optional[str] = Field(default=None)
+    square_payment_id: Optional[str] = Field(default=None)
+    square_order_id: Optional[str] = Field(default=None)
+    square_device_id: Optional[str] = Field(default=None)
+    square_location_id: Optional[str] = Field(default=None)
+    square_status: str = Field(default=SquareTransactionStatus.LOCAL)
+    square_raw_response: Optional[str] = Field(default=None, sa_column=Column(Text))
+
+    # True when Square was not used; False when a terminal checkout was attempted
+    is_local: bool = Field(default=True)
+
+
+class PosConfig(SQLModel, table=True):
+    """
+    Point of Sale configuration. Always contains exactly one row (id=1).
+    Use get_pos_config() in square_service to retrieve or create it.
+    The square_access_token field stores the Square API access token in plaintext —
+    the same model used for the Resend API key in AppSetting. The token is never
+    pre-populated or displayed in the UI after being saved.
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    square_enabled: bool = Field(default=False)
+    square_environment: str = Field(default="sandbox")  # "sandbox" or "production"
+    square_location_id: str = Field(default="")
+    square_device_id: str = Field(default="")
+    square_currency: str = Field(default="CAD")
+    # Per-environment tokens stored separately so switching environments never
+    # clears a stored credential. Neither value is ever shown in the UI after saving.
+    square_access_token_sandbox: str = Field(default="")
+    square_access_token_production: str = Field(default="")
 
 
 class Feedback(SQLModel, table=True):

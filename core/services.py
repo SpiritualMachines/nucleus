@@ -44,6 +44,46 @@ def set_setting(key: str, value: str):
         session.commit()
 
 
+def set_sensitive_setting(key: str, value: str) -> None:
+    """
+    Stores a setting value and flags it as sensitive so the UI knows never to
+    display it after saving. The value is stored in plaintext — the sensitivity
+    flag is purely a UI-layer contract, not an encryption guarantee.
+    Appropriate for API keys on a local SQLite deployment.
+    """
+    with Session(engine) as session:
+        s = session.get(AppSetting, key)
+        if s:
+            s.value = value
+            s.is_sensitive = True
+        else:
+            s = AppSetting(key=key, value=value, is_sensitive=True)
+        session.add(s)
+        session.commit()
+
+
+def sensitive_setting_is_configured(key: str) -> bool:
+    """
+    Returns True when a non-empty value has already been stored for a sensitive
+    key. The UI uses this to decide whether to show an input field or the
+    "configured / hidden" placeholder — it never needs the raw value.
+    """
+    with Session(engine) as session:
+        s = session.get(AppSetting, key)
+        return bool(s and s.value)
+
+
+def get_sensitive_setting_value(key: str) -> str:
+    """
+    Returns the raw value stored for a sensitive setting key.
+    This function is intended for internal service and email use only.
+    It must never be called from a screen or any UI layer.
+    """
+    with Session(engine) as session:
+        s = session.get(AppSetting, key)
+        return s.value if s else ""
+
+
 def initialize_default_settings(seed_values: dict = None):
     """
     Seeds the AppSetting table with default values on first run.
@@ -54,7 +94,7 @@ def initialize_default_settings(seed_values: dict = None):
         "hackspace_name": "Hackspace",
         "tag_name": "Makerspace",
         "app_name": "Nucleus Daemon",
-        "app_version": "v0.962",
+        "app_version": "v0.9.71",
         "ascii_logo": "",
         "logout_timeout_minutes": "10",
         # Space operations
@@ -71,6 +111,12 @@ def initialize_default_settings(seed_values: dict = None):
         "min_password_length": "8",
         "sql_console_enabled": "true",
         "login_attempt_limit": "0",
+        # Email reporting — resend_api_key is seeded separately via set_sensitive_setting
+        "report_from_email": "onboarding@resend.dev",
+        "report_to_email": "",
+        "email_reports_enabled": "false",
+        # 24-hour HH:MM time at which the daily report email is dispatched
+        "report_send_time": "07:00",
     }
     if seed_values:
         defaults.update(seed_values)
@@ -779,6 +825,13 @@ def save_community_contact(
     visited_at: Optional[datetime] = None,
     is_community_tour: bool = False,
     staff_name: Optional[str] = None,
+    pronouns: Optional[str] = None,
+    age_range: Optional[str] = None,
+    postal_code: Optional[str] = None,
+    how_heard: Optional[str] = None,
+    opt_in_updates: bool = False,
+    opt_in_volunteer: bool = False,
+    opt_in_teaching: bool = False,
 ) -> CommunityContact:
     """Saves a walk-in community contact record."""
     with Session(engine) as session:
@@ -792,6 +845,13 @@ def save_community_contact(
             visited_at=visited_at or datetime.now(),
             is_community_tour=is_community_tour,
             staff_name=staff_name,
+            pronouns=pronouns,
+            age_range=age_range,
+            postal_code=postal_code,
+            how_heard=how_heard,
+            opt_in_updates=opt_in_updates,
+            opt_in_volunteer=opt_in_volunteer,
+            opt_in_teaching=opt_in_teaching,
         )
         session.add(contact)
         session.commit()
@@ -1337,3 +1397,158 @@ def get_everything_people_data() -> list[dict]:
             "rows": feedback_rows,
         },
     ]
+
+
+# --- Daily Email Report ---
+
+
+def build_daily_report_data() -> dict:
+    """
+    Assembles the data needed for the daily membership summary email.
+    Returns a plain dict so email_service remains decoupled from the DB layer.
+
+    Keys returned:
+      hackspace_name             - display name of the space
+      report_date                - formatted date string for the report header
+      total_active_members       - current snapshot count of approved MEMBER accounts
+      pending_approvals          - current count of accounts awaiting approval
+      days                       - list of 7 dicts, one per day (oldest first),
+                                   each holding per-day counts for every metric
+      community_contacts_detail  - full detail for every community contact entry
+                                   logged in the past 7 days, ordered by visit time
+    """
+    from collections import defaultdict
+
+    now = datetime.now()
+    today = now.date()
+
+    # Build the ordered list of the 7 dates: [today-6, today-5, ..., today]
+    day_dates = [today - timedelta(days=i) for i in range(6, -1, -1)]
+
+    # Window start: beginning of the oldest day in the range
+    window_start = datetime.combine(day_dates[0], datetime.min.time())
+
+    with Session(engine) as session:
+        # Current snapshot totals — not per-day metrics
+        active_count = (
+            session.exec(
+                select(func.count(User.account_number)).where(
+                    or_(User.role == UserRole.MEMBER, User.role == "member"),
+                    User.is_active.is_(True),
+                )
+            ).one()
+            or 0
+        )
+
+        pending_count = (
+            session.exec(
+                select(func.count(User.account_number)).where(User.is_active.is_(False))
+            ).one()
+            or 0
+        )
+
+        # Fetch all records in the 7-day window once, then bucket by date in Python
+        # to avoid issuing 7 separate queries per metric.
+
+        new_members_raw = session.exec(
+            select(User).where(User.joined_date >= window_start)
+        ).all()
+
+        sign_ins_raw = session.exec(
+            select(SpaceAttendance).where(SpaceAttendance.sign_in_time >= window_start)
+        ).all()
+
+        day_passes_raw = session.exec(
+            select(UserCredits)
+            .where(UserCredits.credit_debit == "daypass")
+            .where(UserCredits.date >= window_start)
+        ).all()
+
+        transactions_raw = session.exec(
+            select(UserCredits)
+            .where(
+                or_(
+                    UserCredits.credit_debit == "credit",
+                    UserCredits.credit_debit == "debit",
+                )
+            )
+            .where(UserCredits.date >= window_start)
+        ).all()
+
+        # Memberships whose end_date falls on one of the 7 days in the window
+        expiring_raw = session.exec(
+            select(ActiveMembership).where(
+                func.date(ActiveMembership.end_date) >= str(day_dates[0]),
+                func.date(ActiveMembership.end_date) <= str(today),
+            )
+        ).all()
+
+        contacts_raw = session.exec(
+            select(CommunityContact)
+            .where(CommunityContact.visited_at >= window_start)
+            .order_by(CommunityContact.visited_at)
+        ).all()
+
+    # --- Bucket records by calendar date ---
+    nm_by_day: dict = defaultdict(int)
+    for u in new_members_raw:
+        if u.joined_date:
+            nm_by_day[u.joined_date.date()] += 1
+
+    si_by_day: dict = defaultdict(int)
+    for a in sign_ins_raw:
+        si_by_day[a.sign_in_time.date()] += 1
+
+    dp_by_day: dict = defaultdict(int)
+    for c in day_passes_raw:
+        dp_by_day[c.date.date()] += 1
+
+    tx_by_day: dict = defaultdict(int)
+    for c in transactions_raw:
+        tx_by_day[c.date.date()] += 1
+
+    ex_by_day: dict = defaultdict(int)
+    for m in expiring_raw:
+        ex_by_day[m.end_date.date()] += 1
+
+    cc_by_day: dict = defaultdict(int)
+    for c in contacts_raw:
+        cc_by_day[c.visited_at.date()] += 1
+
+    # --- Build the per-day list ---
+    days = [
+        {
+            "date_label": d.strftime("%a %b %d"),
+            "new_members": nm_by_day[d],
+            "memberships_expiring": ex_by_day[d],
+            "sign_ins": si_by_day[d],
+            "day_passes": dp_by_day[d],
+            "transactions": tx_by_day[d],
+            "community_contacts": cc_by_day[d],
+        }
+        for d in day_dates
+    ]
+
+    # --- Full community contact detail for the period ---
+    community_contacts_detail = [
+        {
+            "name": f"{c.first_name} {c.last_name or ''}".strip(),
+            "email": c.email,
+            "phone": c.phone or "",
+            "brought_in_by": c.brought_in_by or "",
+            "visited_at": c.visited_at.strftime("%Y-%m-%d %H:%M"),
+            "community_tour": "Yes" if c.is_community_tour else "No",
+            "staff": c.staff_name or "",
+            "notes": c.other_reason or "",
+        }
+        for c in contacts_raw
+    ]
+
+    return {
+        "hackspace_name": get_setting("hackspace_name", "Hackspace"),
+        "report_date": today.strftime("%B %d, %Y"),
+        "total_active_members": int(active_count),
+        "pending_approvals": int(pending_count),
+        "days": days,
+        "community_contacts_detail": community_contacts_detail,
+    }

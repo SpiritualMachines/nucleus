@@ -5,6 +5,31 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.9.72] - 2026-03-09
+
+### Added
+
+#### Square Terminal Integration (Point of Sale)
+- Push transactions to Square Terminal for Credit and Debit transactions
+- Manual Transaction section added to the top of the Purchases tab (Staff and Admin): enter amount, customer name, email, phone, and description then send directly to the Square Terminal or record locally
+- Transaction history table in the Purchases tab shows recent transactions with status and source; staff can select a row and check its live status from Square
+- New Point of Sale tab in Settings (Admin only): enable or disable Square Terminal, switch between Sandbox and Production environments, configure Location ID, Device ID, and currency code, and save the access token as a write-only credential
+
+
+---
+
+## [0.9.71] - 2026-03-08
+
+### Added
+
+#### Added Resend API Email and Notifications
+- Added ability to connect with resend.com/resend.dev email service via API
+
+#### Added Option to Send Daily Membership and Community Contacts Report
+- New `core/email_service.py` module delivers a daily membership summary email via the Resend API
+
+---
+
 ## [0.9.7] - 2026-03-07
 
 ### Added

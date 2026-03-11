@@ -19,7 +19,9 @@ os.chdir(project_root)
 # -------------------------
 
 
-# Import models to ensure they are registered with SQLModel
+# Import models to ensure they are registered with SQLModel.
+# square_service is imported explicitly so that SquareTransaction and PosConfig
+# are registered with SQLModel.metadata before create_db_and_tables() is called.
 from core import services  # noqa: E402
 from core.config import settings  # noqa: E402
 from core.database import create_db_and_tables, run_migrations  # noqa: E402
@@ -31,7 +33,7 @@ def backup_database():
     backup_dir = "backups"
 
     if not os.path.exists(db_file):
-        print("⚠️  No database found. Nothing to backup.")
+        print("WARNING: No database found. Nothing to backup.")
         return
 
     if not os.path.exists(backup_dir):
@@ -44,9 +46,9 @@ def backup_database():
 
     try:
         shutil.copy2(db_file, backup_path)
-        print(f"✅ Backup created: {backup_path}")
+        print(f"Backup created: {backup_path}")
     except Exception as e:
-        print(f"❌ Backup Failed: {e}")
+        print(f"Backup Failed: {e}")
 
 
 def seed_settings_from_file():
@@ -103,27 +105,39 @@ def seed_settings_from_file():
 
 def prompt_version_update():
     """
-    Asks whether to update the stored app version number.
+    Shows both the version from settings.txt (code version) and the version
+    stored in the database, then optionally updates the stored version.
     If confirmed, writes the new version to the AppSetting table, overwriting
     whatever value was previously stored. Skips silently on empty input.
     """
-    answer = input("\nUpdate app version number? (y/N): ").strip().lower()
+    db_version = services.get_setting("app_version", "(not set)")
+    code_version = settings.APP_VERSION
+
+    print(f"\n  Version in settings.txt : {code_version}")
+    print(f"  Version stored in DB    : {db_version}")
+
+    if db_version == code_version:
+        print("  Versions match. No update needed.")
+
+    answer = input("\nUpdate DB version number? (y/N): ").strip().lower()
     if answer != "y":
         return
 
-    current = services.get_setting("app_version", "(not set)")
-    print(f"  Current version: {current}")
-    new_version = input("  Enter new version number: ").strip()
+    new_version = input(f"  Enter new version number [{code_version}]: ").strip()
+
+    # Default to the code version if the user presses Enter without typing
+    if not new_version:
+        new_version = code_version
 
     if not new_version:
-        print("  No version entered. Skipping.")
+        print("  No version available. Skipping.")
         return
 
     services.set_setting("app_version", new_version)
     print(f"  Version updated to: {new_version}")
 
 
-def update_database():
+def run_update():
     print(f"Target Database: {project_root / 'hackspace.db'}")
 
     # 1. Backup
@@ -143,11 +157,12 @@ def update_database():
     seed_settings_from_file()
     print("Settings Verified.")
 
-    # 5. Optionally update the app version number
+    # 5. Show version comparison and optionally update the stored version
+    print("\n--- Version ---")
     prompt_version_update()
 
-    print("\nDatabase Update Complete.")
+    print("\nUpdate Complete.")
 
 
 if __name__ == "__main__":
-    update_database()
+    run_update()

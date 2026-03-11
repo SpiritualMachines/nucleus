@@ -30,10 +30,11 @@ class HackspaceApp(App):
         # 1. FORCE THE THEME PROGRAMMATICALLY
         self.theme = "nord"
 
-        # 2. Start the daily maintenance scheduler in a single background thread.
-        #    It runs all maintenance tasks immediately on launch, then repeats them
-        #    every day just after midnight for as long as the app stays running.
+        # 2. Start background scheduler threads.
+        #    Maintenance (backup + expiry) runs immediately and then daily at midnight.
+        #    Email reports run on their own thread, firing at the admin-configured time.
         threading.Thread(target=self.run_maintenance_scheduler, daemon=True).start()
+        threading.Thread(target=self.run_email_scheduler, daemon=True).start()
 
         # 3. Initialize DB, apply pending schema migrations, seed settings, then load UI
         create_db_and_tables()
@@ -50,6 +51,21 @@ class HackspaceApp(App):
                 "logout_timeout_minutes": "10",
             }
         )
+
+        # Ensure the resend_api_key row exists as a sensitive entry so that
+        # sensitive_setting_is_configured() can read it on the first launch even
+        # before the admin has entered a value.  Only seeds when no row exists yet.
+        if not services.sensitive_setting_is_configured("resend_api_key"):
+            from core.models import AppSetting
+            from core.database import engine
+            from sqlmodel import Session
+
+            with Session(engine) as _s:
+                if not _s.get(AppSetting, "resend_api_key"):
+                    _s.add(
+                        AppSetting(key="resend_api_key", value="", is_sensitive=True)
+                    )
+                    _s.commit()
 
         # DB settings take precedence over the file for the app title
         self.title = services.get_setting("hackspace_name", settings.HACKSPACE_NAME)
@@ -75,11 +91,50 @@ class HackspaceApp(App):
             time.sleep(sleep_seconds)
             self.run_daily_maintenance()
 
+    def run_email_scheduler(self):
+        """
+        Daemon thread that fires the daily email report at the admin-configured time
+        (report_send_time setting, HH:MM 24-hour format, default 07:00).
+        On each wake, it calculates the next future occurrence of the configured time
+        so that restarting the app after the scheduled time never causes an immediate
+        spurious send — the email waits until the next day.
+        """
+        while True:
+            now = datetime.now()
+            send_time_str = services.get_setting("report_send_time", "07:00")
+            try:
+                parts = send_time_str.strip().split(":")
+                send_hour = int(parts[0])
+                send_minute = int(parts[1]) if len(parts) > 1 else 0
+            except Exception:
+                # Fall back to 07:00 if the stored value is malformed
+                send_hour, send_minute = 7, 0
+                print(
+                    f"[Email Scheduler] Invalid report_send_time '{send_time_str}', using 07:00"
+                )
+
+            next_send = now.replace(
+                hour=send_hour, minute=send_minute, second=0, microsecond=0
+            )
+            # If the configured time has already passed today, schedule for tomorrow
+            if next_send <= now:
+                next_send += timedelta(days=1)
+
+            sleep_seconds = (next_send - now).total_seconds()
+            print(
+                f"[Email Scheduler] Next report scheduled for {next_send} (in {sleep_seconds / 3600:.1f} hours)"
+            )
+            time.sleep(sleep_seconds)
+            print(
+                f"[Email Scheduler] Triggering daily email report at {datetime.now()}"
+            )
+            self.send_daily_email_report()
+
     def run_daily_maintenance(self):
         """
-        Runs all daily maintenance tasks in sequence. Called at launch and once per
-        day just after midnight. Each task is independent — a failure in one does not
-        prevent the others from running.
+        Runs backup and membership-expiry tasks in sequence. Called at launch and once
+        per day just after midnight. Each task is independent — a failure in one does
+        not prevent the others from running. Email is handled by run_email_scheduler.
         """
         self.perform_daily_backup()
         self.check_expired_memberships()
@@ -95,6 +150,65 @@ class HackspaceApp(App):
             self.call_from_thread(
                 self.notify,
                 f"Membership check error: {str(e)}",
+                severity="error",
+            )
+
+    def send_daily_email_report(self):
+        """
+        Sends the daily membership summary email if reports are enabled and all
+        required settings (API key, to-address) have been configured. Errors and
+        the "not configured" case are surfaced as notifications so staff can act
+        on them without checking logs.
+        """
+        try:
+            from core.email_service import send_daily_report
+            from core import services
+
+            # Check prerequisites first to provide better diagnostic feedback
+            enabled = (
+                services.get_setting("email_reports_enabled", "false").lower() == "true"
+            )
+            if not enabled:
+                # Silently skip if disabled (expected behavior)
+                return
+
+            api_key = services.get_sensitive_setting_value("resend_api_key")
+            to_email = services.get_setting("report_to_email", "").strip()
+
+            if not api_key:
+                self.call_from_thread(
+                    self.notify,
+                    "Daily report skipped: Resend API key not configured.",
+                    severity="warning",
+                )
+                return
+
+            if not to_email:
+                self.call_from_thread(
+                    self.notify,
+                    "Daily report skipped: Report recipient email not configured.",
+                    severity="warning",
+                )
+                return
+
+            # Prerequisites met, send the report
+            sent = send_daily_report()
+            if sent:
+                self.call_from_thread(
+                    self.notify, "Daily report email sent successfully."
+                )
+            else:
+                # Fallback: shouldn't reach here if prerequisites are checked above,
+                # but notify if it somehow returns False
+                self.call_from_thread(
+                    self.notify,
+                    "Daily report failed to send (check logs).",
+                    severity="error",
+                )
+        except Exception as e:
+            self.call_from_thread(
+                self.notify,
+                f"Daily report email error: {str(e)}",
                 severity="error",
             )
 
