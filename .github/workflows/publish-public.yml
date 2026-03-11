@@ -1,0 +1,66 @@
+name: Publish to Public Repo
+
+on:
+  workflow_dispatch:
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout private repo
+        uses: actions/checkout@v4
+
+      - name: Setup SSH agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.NUCLEUS_PUBLIC_DEPLOY }}
+
+      - name: Add GitHub to known hosts
+        run: ssh-keyscan github.com >> ~/.ssh/known_hosts
+
+      - name: Clone public repo
+        run: git clone git@github.com:SpiritualMachines/nucleus.git /tmp/public-repo
+
+      - name: Clear public repo contents
+        run: |
+          cd /tmp/public-repo
+          git rm -rf . --quiet || true
+
+      - name: Copy public files
+        run: |
+          cp -r core        /tmp/public-repo/
+          cp -r screens     /tmp/public-repo/
+          cp -r screenshots /tmp/public-repo/
+          cp -r scripts     /tmp/public-repo/
+          cp -r theme       /tmp/public-repo/
+          cp nucleus.py     /tmp/public-repo/
+          cp requirements.txt /tmp/public-repo/
+          cp README.md      /tmp/public-repo/
+          cp CHANGELOG.md   /tmp/public-repo/
+
+      - name: Extract version from README
+        id: version
+        run: |
+          VERSION="v$(grep -m1 'Current version:' README.md | grep -oP '\d+\.\d+\.\d+')"
+          echo "tag=$VERSION" >> $GITHUB_OUTPUT
+
+      - name: Commit and push
+        run: |
+          cd /tmp/public-repo
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --staged --quiet && echo "No changes to publish." || git commit -m "chore: sync public release ${{ steps.version.outputs.tag }}"
+          git push
+
+      - name: Tag public release
+        run: |
+          cd /tmp/public-repo
+          TAG="${{ steps.version.outputs.tag }}"
+          if git rev-parse "$TAG" >/dev/null 2>&1; then
+            echo "Tag $TAG already exists, skipping."
+          else
+            git tag "$TAG"
+            git push origin "$TAG"
+          fi
