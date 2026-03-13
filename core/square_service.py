@@ -522,6 +522,9 @@ def record_cash_payment(
             ),
             location_id=config.square_location_id,
             customer_id=square_customer_id,
+            # Passing the buyer's email causes Square to email them a receipt
+            # automatically — the only receipt mechanism available for cash payments.
+            buyer_email_address=customer_email or None,
             note=note_text or None,
             reference_id=customer_name[:40] if customer_name else None,
             statement_description_identifier=statement_id,
@@ -707,6 +710,265 @@ def check_device_pairing_status(device_code_id: str) -> Tuple[bool, str, Optiona
             f"Not paired yet (status: {status}). Enter the code on the terminal then check again.",
             None,
         )
+
+
+def refresh_pending_transactions() -> int:
+    """
+    Queries Square for the current status of every locally-pending or in-progress
+    terminal checkout and updates the database records.
+
+    This is called before loading the transactions table so that any checkouts
+    Square auto-cancelled (typically after ~5 minutes of inactivity) are reflected
+    immediately rather than waiting for manual staff intervention.
+
+    Returns the number of transactions that were successfully refreshed.
+    """
+    pending_statuses = {
+        SquareTransactionStatus.PENDING.value,
+        SquareTransactionStatus.IN_PROGRESS.value,
+    }
+
+    with Session(engine) as session:
+        stmt = select(SquareTransaction).where(
+            SquareTransaction.square_checkout_id.is_not(None)
+        )
+        candidates = session.exec(stmt).all()
+        pending = [t for t in candidates if t.square_status in pending_statuses]
+
+    refreshed = 0
+    for txn in pending:
+        ok, _ = update_transaction_status(txn.id)
+        if ok:
+            refreshed += 1
+
+    return refreshed
+
+
+# ---------------------------------------------------------------------------
+# Square Recurring Subscription helpers
+# ---------------------------------------------------------------------------
+
+# Statuses Square considers live and billable — member access should be granted.
+_SUBSCRIPTION_ACTIVE_STATUSES = {"ACTIVE", "PENDING"}
+
+
+def get_or_create_member_square_customer(
+    acct_num: int,
+) -> Tuple[bool, str, Optional[str]]:
+    """
+    Returns the Square Customer ID for the given member, creating a new
+    Square Customer record if one has not been linked yet. Persists the ID
+    back to the User row so future calls skip the API round-trip.
+
+    Returns (success, message, customer_id).
+    """
+    from core.models import User
+
+    with Session(engine) as session:
+        user = session.get(User, acct_num)
+        if not user:
+            return False, f"No member found with account number {acct_num}.", None
+
+        # Reuse the stored ID rather than creating a duplicate customer record.
+        if user.square_customer_id:
+            return True, "Existing Square customer record found.", user.square_customer_id
+
+        client = _get_square_client()
+        if not client:
+            return (
+                False,
+                "Square client could not be initialised. Check that the access token is configured.",
+                None,
+            )
+
+        customer_name = f"{user.first_name} {user.last_name}"
+        customer_id = _get_or_create_square_customer(
+            client, customer_name, user.email, user.phone or None
+        )
+        if not customer_id:
+            return False, "Could not create Square customer record. Check the API token.", None
+
+        user.square_customer_id = customer_id
+        session.add(user)
+        session.commit()
+        return True, "Square customer record created.", customer_id
+
+
+def activate_square_subscription(
+    acct_num: int,
+    plan_variation_id: str,
+    timezone: str = "America/Toronto",
+) -> Tuple[bool, str]:
+    """
+    Enrols the member in a Square recurring subscription using invoice-based
+    billing. Square emails the member a payment link for each billing cycle.
+    Nucleus stores the subscription ID and status for daily polling.
+
+    No card data is passed to or stored in Nucleus at any point.
+
+    Returns (success, message).
+    """
+    from core.models import User
+
+    if not plan_variation_id:
+        return False, "No Plan Variation ID is configured. Set it in Settings > Subscriptions."
+
+    ok, msg, customer_id = get_or_create_member_square_customer(acct_num)
+    if not ok:
+        return False, msg
+
+    config = get_pos_config()
+    if not config.square_location_id:
+        return False, "No Location ID configured. Check Settings > Point of Sale."
+
+    client = _get_square_client()
+    if not client:
+        return (
+            False,
+            "Square client could not be initialised. Check that the access token is configured.",
+        )
+
+    try:
+        result = client.subscriptions.create(
+            idempotency_key=str(uuid.uuid4()),
+            location_id=config.square_location_id,
+            plan_variation_id=plan_variation_id,
+            customer_id=customer_id,
+            # Omitting card_id causes Square to send invoice/payment request emails.
+            start_date=datetime.now().date().isoformat(),
+            timezone=timezone,
+            source={"name": "Nucleus"},
+        )
+    except Exception as exc:
+        return False, f"Square API error: {exc}"
+
+    if result.errors:
+        error_msg = "; ".join((e.detail or str(e)) for e in result.errors)
+        return False, f"Square returned errors: {error_msg}"
+
+    sub = result.subscription
+    with Session(engine) as session:
+        user = session.get(User, acct_num)
+        if user:
+            user.square_subscription_id = sub.id
+            user.square_subscription_status = sub.status or "PENDING"
+            user.square_subscription_checked_at = datetime.now()
+            session.add(user)
+            session.commit()
+
+    return (
+        True,
+        f"Subscription activated (ID: {sub.id}). Square will email the member a payment link.",
+    )
+
+
+def poll_member_subscription(acct_num: int) -> Tuple[bool, str]:
+    """
+    Fetches the current subscription status from Square for the given member
+    and updates the local User record. Does not automatically change the
+    member's role — status changes are surfaced to staff for review.
+
+    Returns (success, message).
+    """
+    from core.models import User
+
+    with Session(engine) as session:
+        user = session.get(User, acct_num)
+        if not user:
+            return False, f"No member found with account number {acct_num}."
+        if not user.square_subscription_id:
+            return False, "This member has no active Square subscription."
+
+        client = _get_square_client()
+        if not client:
+            return False, "Square client could not be initialised."
+
+        try:
+            result = client.subscriptions.get(
+                subscription_id=user.square_subscription_id
+            )
+        except Exception as exc:
+            return False, f"Square API error: {exc}"
+
+        if result.errors:
+            error_msg = "; ".join((e.detail or str(e)) for e in result.errors)
+            return False, f"Square returned errors: {error_msg}"
+
+        sub = result.subscription
+        new_status = (sub.status or "UNKNOWN").upper()
+        user.square_subscription_status = new_status
+        user.square_subscription_checked_at = datetime.now()
+        session.add(user)
+        session.commit()
+
+        is_active = new_status in _SUBSCRIPTION_ACTIVE_STATUSES
+        action = "Access is active." if is_active else f"Access may need review (status: {new_status})."
+        return True, f"Subscription status: {new_status}. {action}"
+
+
+def cancel_square_subscription(acct_num: int) -> Tuple[bool, str]:
+    """
+    Cancels the Square subscription for the given member and clears the
+    subscription ID from the local User record.
+
+    Returns (success, message).
+    """
+    from core.models import User
+
+    with Session(engine) as session:
+        user = session.get(User, acct_num)
+        if not user:
+            return False, f"No member found with account number {acct_num}."
+        if not user.square_subscription_id:
+            return False, "This member has no active Square subscription to cancel."
+
+        subscription_id = user.square_subscription_id
+
+        client = _get_square_client()
+        if not client:
+            return False, "Square client could not be initialised."
+
+        try:
+            result = client.subscriptions.cancel(subscription_id=subscription_id)
+        except Exception as exc:
+            return False, f"Square API error: {exc}"
+
+        if result.errors:
+            error_msg = "; ".join((e.detail or str(e)) for e in result.errors)
+            return False, f"Square returned errors: {error_msg}"
+
+        user.square_subscription_id = None
+        user.square_subscription_status = "CANCELLED"
+        user.square_subscription_checked_at = datetime.now()
+        session.add(user)
+        session.commit()
+
+        return True, f"Subscription {subscription_id} cancelled."
+
+
+def poll_all_active_subscriptions() -> Tuple[int, int]:
+    """
+    Polls Square for the current subscription status of every member that has
+    a subscription ID on file. Intended to be run once daily by a script or
+    scheduler. Returns (polled_count, error_count).
+    """
+    from core.models import User
+    from sqlmodel import select as sql_select
+
+    with Session(engine) as session:
+        stmt = sql_select(User).where(User.square_subscription_id.is_not(None))
+        members = session.exec(stmt).all()
+
+    polled = 0
+    errors = 0
+    for member in members:
+        ok, _ = poll_member_subscription(member.account_number)
+        if ok:
+            polled += 1
+        else:
+            errors += 1
+
+    return polled, errors
 
 
 def get_recent_transactions(limit: int = 50) -> List[SquareTransaction]:

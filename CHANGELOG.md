@@ -5,6 +5,43 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.9.73] - 2026-03-12
+
+### Added
+
+#### Inventory Items
+- New **Settings > Inventory** panel (admin only): add items with a name, optional description, and price; items appear in a table and can be deleted
+- Inventory cart in the Manual Transaction section (Purchases tab, staff and admin): click any item in the available items table, set a quantity, and click **Add to Cart**; the same item added a second time merges its quantity
+- Cart auto-fills the **Amount** field with the running total and the **Description** field with a summary of item names and quantities
+- Staff can still edit Amount and Description manually after items are added to mix cart items with custom charges
+- **Remove Selected** removes the highlighted cart row; **Clear Cart** empties it entirely
+- **Clear Form** also clears the cart
+
+#### Member Storage
+- New **Storage** tab (staff and admin) for tracking items stored at the space
+- Active assignments table: unit number, assigned name, item description, notes, charges flag, total, and assigned date
+- **Assign Storage** button opens a modal where staff select the unit from a dropdown, enter a freeform name or search for a registered member, describe the item, and optionally record charges (unit type, unit count, cost per unit; total auto-calculates)
+- **Remove Selected (Archive)** archives the selected assignment; archived records appear in a read-only history table below
+- New **Settings > Storage Units** panel (admin only): create units with a unit number (auto-increments) and description (defaults to "Storage Bin", both editable), and delete units that have no active assignments
+
+#### Square Recurring Membership Subscriptions
+- Staff and admin can enrol a member in a Square recurring subscription from the Purchases tab by searching for a user and clicking **Activate Square Membership Subscription**
+- The same action is available via the Member Action modal in the Reports tab
+- Square handles billing entirely: it emails the member a payment link each billing cycle; no card data is stored in or processed by Nucleus
+- Three new action buttons appear in the Purchases tab once a user is selected: Activate Square Membership Subscription, Cancel Subscription, and Poll Subscription Status
+- New **Settings > Subscriptions** panel: configure the Square Plan Variation ID (created once in the Square Dashboard) and the billing timezone
+
+#### Product Tier Templates
+- Admins can define reusable membership and day pass tier templates in Settings > Product Categories
+- Each membership tier stores a name, price, duration in days, optional consumables credits, and an optional description
+- Each day pass tier stores a name, price, and optional description
+- Add Membership and Add Day Pass dialogs now include an optional tier selector; choosing a tier auto-fills price, duration, and description fields
+- When a membership tier with consumables credits is applied, those credits are automatically posted to the member's consumables balance after the membership is saved
+- Selecting "Custom" in either dialog restores the original manual-entry behaviour
+
+
+---
+
 ## [0.9.72] - 2026-03-09
 
 ### Added

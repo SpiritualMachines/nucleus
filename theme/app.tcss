@@ -4,6 +4,11 @@ App {
     color: $text;
 }
 
+/* Ensure all modal overlay screens center their inner container */
+ModalScreen {
+    align: center middle;
+}
+
 /* --- Shared Screen Backgrounds (The Hashes) --- */
 LoginScreen,
 RegisterScreen,
@@ -42,11 +47,11 @@ DatabaseLockModal {
     align: center top;
 }
 
-/* Large Splash Dialog (Policies, Edit Profile, Staff Confirm) */
+/* Large Splash Dialog (Policies, Edit Profile, Staff Confirm, Modals) */
 .splash-container {
-    width: 80%;
-    height: auto;
-    max-height: 80%;
+    width: 90%;
+    height: 90%;
+    max-height: 90%;
     background: $surface;
     border: heavy $primary;
     padding: 2;
@@ -75,11 +80,11 @@ Button {
     min-width: 20;
     height: auto;
     content-align: center middle;
-    padding: 1 2;
-    margin: 1 0;
+    padding: 0 2;
+    margin: 1 1 1 0;
     background: $primary;
     color: $text;
-    border: none;
+    border: tall $primary;
 }
 
 /* Force main action buttons to be full width */
@@ -110,6 +115,16 @@ Button.error {
     height: auto;
     margin: 1 0;
     align-vertical: middle;
+}
+
+.search-row {
+    height: auto;
+    margin: 1 0;
+    align-vertical: middle;
+}
+
+.search-row Input {
+    width: 1fr;
 }
 
 Checkbox {
@@ -155,14 +170,44 @@ Checkbox {
     color: $text-muted;
 }
 
+.form-subsection {
+    height: auto;
+    margin-top: 1;
+    margin-bottom: 1;
+    border: solid $secondary;
+    padding: 1;
+    background: $boost;
+}
+
 .error {
     color: $error;
     text-align: center;
 }
 
+Label {
+    margin-top: 1;
+}
+
+/* Title and login labels sit at the top of containers — suppress the extra margin. */
+.title {
+    margin-top: 0;
+}
+
+.login-hackspace-name {
+    margin-top: 0;
+}
+
 Input {
     margin: 1;
     color: $text;
+}
+
+Select {
+    margin: 1 0;
+}
+
+Collapsible {
+    margin-top: 1;
 }
 
 .scrollable {
@@ -195,9 +240,7 @@ Input {
 /* --- Directory Select Specifics --- */
 
 DirectorySelectScreen .splash-container {
-    height: 80%; /* Fixed height relative to screen */
-    max-height: 80%;
-    layout: vertical; /* Ensure vertical stacking */
+    layout: vertical;
 }
 
 /* Ensure the directory tree takes available space but leaves room for buttons */
@@ -224,4 +267,23 @@ DirectorySelectScreen .filter-row {
 .footer-container {
     height: auto;
     dock: bottom;
+}
+
+/* --- Login Screen Section Divider --- */
+.login-section-label {
+    width: 100%;
+    text-align: center;
+    color: $text-muted;
+    margin-top: 1;
+    border-top: solid $secondary 30%;
+}
+
+/* --- Tabs --- */
+Tab {
+    padding: 0 3;
+    border-right: solid $secondary 40%;
+}
+
+Tab.-active {
+    border-right: solid $secondary 40%;
 }

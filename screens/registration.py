@@ -75,12 +75,12 @@ class RegisterScreen(Screen):
         with Vertical(classes="form-container scrollable"):
             yield Label(title, classes="title")
 
-            yield Label("Account Login")
+            yield Label("Account Login", classes="subtitle")
             yield Input(placeholder="Email Address", id="reg_email")
             yield Input(placeholder="Password", password=True, id="reg_pass1")
             yield Input(placeholder="Confirm Password", password=True, id="reg_pass2")
 
-            yield Label("Personal Information")
+            yield Label("Personal Information", classes="subtitle")
             yield Input(placeholder="First Name", id="reg_fname")
             yield Input(placeholder="Last Name", id="reg_lname")
             yield Input(
@@ -88,29 +88,30 @@ class RegisterScreen(Screen):
             )
             yield Input(placeholder="Phone (10 Digits)", id="reg_phone")
 
-            yield Label("Address")
+            yield Label("Address", classes="subtitle")
             yield Input(placeholder="Street Address", id="reg_addr")
             yield Input(placeholder="City", id="reg_city")
             yield Input(placeholder="Province", id="reg_prov")
             yield Input(placeholder="Postal Code", id="reg_postal")
 
-            yield Label("Emergency Contact")
+            yield Label("Emergency Contact", classes="subtitle")
             yield Input(placeholder="Contact First Name", id="reg_em_fname")
             yield Input(placeholder="Contact Last Name", id="reg_em_lname")
             yield Input(placeholder="Contact Phone", id="reg_em_phone")
 
-            yield Label("Health & Safety")
+            yield Label("Health & Safety", classes="subtitle")
             yield Input(placeholder="Allergies (or 'None')", id="reg_allergies")
             yield Input(placeholder="Health Concerns (Optional)", id="reg_health")
 
             yield Label(
-                f"{services.get_setting('tag_name', settings.TAG_NAME)} Info (Optional)"
+                f"{services.get_setting('tag_name', settings.TAG_NAME)} Info (Optional)",
+                classes="subtitle",
             )
             yield Input(placeholder="Interests / Skills", id="reg_interests")
             yield Input(placeholder="Skills / Tool Training", id="reg_skills")
             yield Input(placeholder="Comments", id="reg_comments")
 
-            yield Label("Agreements")
+            yield Label("Agreements", classes="subtitle")
             # If staff mode, these checks are handled in the confirmation popup
             if not self.staff_mode:
                 yield Button("Read Terms of Service", id="btn_tos")

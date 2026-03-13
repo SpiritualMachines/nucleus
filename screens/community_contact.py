@@ -131,16 +131,18 @@ class CommunityContactModal(ModalScreen):
                 yield Label("Date / Time")
                 yield Input(now_str, id="cc_datetime")
 
-                yield Checkbox("Tour Given", id="cc_tour_given")
-                yield Checkbox("(Staff Only) Unknown", id="cc_tour")
-
-                yield Label(
-                    "Staff Name and Description (required for Unknown walk-in record)"
-                )
-                yield Input(
-                    placeholder="Staff name and notes about the walk-in tour visit",
-                    id="cc_staff_name",
-                )
+                # --- Unknown Walk-In sub-section ---
+                with Vertical(classes="form-subsection"):
+                    yield Label("Unknown Walk-In", classes="subtitle")
+                    yield Checkbox("Tour Given", id="cc_tour_given")
+                    yield Checkbox("Unknown Walk-In", id="cc_tour")
+                    yield Label(
+                        "Staff Name and Description (required for Unknown walk-in record)"
+                    )
+                    yield Input(
+                        placeholder="Staff name and notes about the walk-in tour visit",
+                        id="cc_staff_name",
+                    )
 
             with Horizontal(classes="filter-row"):
                 yield Button("Submit", variant="success", id="cc_submit")

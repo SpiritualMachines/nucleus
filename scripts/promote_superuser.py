@@ -27,7 +27,7 @@ db_path = project_root / "hackspace.db"
 if not db_path.exists():
     print(f"❌ Error: Database file not found at: {db_path}")
     print(
-        "   Please run the main application (hack_daemon.py) first to initialize the database."
+        "   Please run the main application (nucleus.py) first to initialize the database."
     )
     sys.exit(1)
 else:

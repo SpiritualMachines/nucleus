@@ -11,8 +11,7 @@ class ChangePasswordScreen(ModalScreen):
     """A modal dialog to change password."""
 
     def compose(self) -> ComposeResult:
-        # Uses login-container for size, but Screen CSS provides the hatched background
-        with Vertical(classes="login-container"):
+        with Vertical(classes="splash-container scrollable"):
             yield Label("Change Password", classes="title")
             yield Input(placeholder="Current Password", password=True, id="old_pass")
             yield Input(placeholder="New Password", password=True, id="new_pass")

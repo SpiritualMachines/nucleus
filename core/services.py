@@ -11,9 +11,14 @@ from core.models import (
     AppSetting,
     CommunityContact,
     Feedback,
+    InventoryItem,
     MembershipDues,
+    ProductTier,
     SafetyTraining,
     SpaceAttendance,
+    SquareTransaction,
+    StorageAssignment,
+    StorageUnit,
     User,
     UserCredits,
     UserPreference,
@@ -859,6 +864,73 @@ def save_community_contact(
         return contact
 
 
+# --- Product Tiers ---
+
+
+def get_product_tiers(tier_type: str) -> List["ProductTier"]:
+    """
+    Returns all active ProductTier records for the given type.
+    tier_type must be 'membership' or 'daypass'.
+    """
+    with Session(engine) as session:
+        stmt = (
+            select(ProductTier)
+            .where(ProductTier.tier_type == tier_type)
+            .where(ProductTier.is_active == True)  # noqa: E712
+            .order_by(ProductTier.name)
+        )
+        return session.exec(stmt).all()
+
+
+def get_product_tier(tier_id: int) -> Optional["ProductTier"]:
+    """Returns a single ProductTier by ID, or None if not found."""
+    with Session(engine) as session:
+        return session.get(ProductTier, tier_id)
+
+
+def save_product_tier(
+    name: str,
+    tier_type: str,
+    price: float,
+    duration_days: Optional[int],
+    consumables_credits: Optional[float],
+    description: Optional[str],
+) -> "ProductTier":
+    """
+    Creates and persists a new ProductTier template.
+    Callers are responsible for passing validated values — price must be >= 0,
+    and tier_type must be 'membership' or 'daypass'.
+    """
+    with Session(engine) as session:
+        tier = ProductTier(
+            name=name,
+            tier_type=tier_type,
+            price=price,
+            duration_days=duration_days,
+            consumables_credits=consumables_credits,
+            description=description,
+            is_active=True,
+        )
+        session.add(tier)
+        session.commit()
+        session.refresh(tier)
+        return tier
+
+
+def delete_product_tier(tier_id: int) -> bool:
+    """
+    Hard-deletes a ProductTier by ID.
+    Returns True if the record was found and deleted, False if not found.
+    """
+    with Session(engine) as session:
+        tier = session.get(ProductTier, tier_id)
+        if not tier:
+            return False
+        session.delete(tier)
+        session.commit()
+        return True
+
+
 # --- Admin SQL ---
 
 
@@ -1489,6 +1561,12 @@ def build_daily_report_data() -> dict:
             .order_by(CommunityContact.visited_at)
         ).all()
 
+        square_txns_raw = session.exec(
+            select(SquareTransaction)
+            .where(SquareTransaction.created_at >= window_start)
+            .order_by(desc(SquareTransaction.created_at))
+        ).all()
+
     # --- Bucket records by calendar date ---
     nm_by_day: dict = defaultdict(int)
     for u in new_members_raw:
@@ -1496,8 +1574,11 @@ def build_daily_report_data() -> dict:
             nm_by_day[u.joined_date.date()] += 1
 
     si_by_day: dict = defaultdict(int)
+    vol_by_day: dict = defaultdict(int)
     for a in sign_ins_raw:
         si_by_day[a.sign_in_time.date()] += 1
+        if a.visit_type in ("Volunteer", "Volunteer and Visit"):
+            vol_by_day[a.sign_in_time.date()] += 1
 
     dp_by_day: dict = defaultdict(int)
     for c in day_passes_raw:
@@ -1522,6 +1603,7 @@ def build_daily_report_data() -> dict:
             "new_members": nm_by_day[d],
             "memberships_expiring": ex_by_day[d],
             "sign_ins": si_by_day[d],
+            "volunteers": vol_by_day[d],
             "day_passes": dp_by_day[d],
             "transactions": tx_by_day[d],
             "community_contacts": cc_by_day[d],
@@ -1544,6 +1626,27 @@ def build_daily_report_data() -> dict:
         for c in contacts_raw
     ]
 
+    # --- Recent Square/POS transactions for the period (newest first) ---
+    recent_transactions_detail = [
+        {
+            "date": t.created_at.strftime("%Y-%m-%d %H:%M"),
+            "customer_name": t.customer_name or "",
+            "amount": f"${t.amount:.2f}",
+            "description": t.description or "",
+            "status": t.square_status.replace("_", " ").title(),
+            "via": (
+                "Cash (Square)"
+                if t.square_status == "cash_square"
+                else "Cash"
+                if t.square_status == "cash"
+                else "Local"
+                if t.is_local
+                else "Square"
+            ),
+        }
+        for t in square_txns_raw
+    ]
+
     return {
         "hackspace_name": get_setting("hackspace_name", "Hackspace"),
         "report_date": today.strftime("%B %d, %Y"),
@@ -1551,4 +1654,186 @@ def build_daily_report_data() -> dict:
         "pending_approvals": int(pending_count),
         "days": days,
         "community_contacts_detail": community_contacts_detail,
+        "recent_transactions_detail": recent_transactions_detail,
     }
+
+
+# --- Storage ---
+
+
+def get_next_storage_unit_number() -> str:
+    """
+    Returns the next available unit number by finding the highest existing
+    numeric unit number and incrementing it. Falls back to "1" when no units
+    exist or none have a purely numeric label.
+    """
+    with Session(engine) as session:
+        units = session.exec(select(StorageUnit)).all()
+        numeric = []
+        for u in units:
+            try:
+                numeric.append(int(u.unit_number))
+            except (ValueError, TypeError):
+                pass
+        return str(max(numeric) + 1) if numeric else "1"
+
+
+def create_storage_unit(unit_number: str, description: str) -> StorageUnit:
+    """Creates and persists a new active storage unit."""
+    with Session(engine) as session:
+        unit = StorageUnit(unit_number=unit_number, description=description, is_active=True)
+        session.add(unit)
+        session.commit()
+        session.refresh(unit)
+        return unit
+
+
+def delete_storage_unit(unit_id: int) -> bool:
+    """
+    Permanently deletes a storage unit. Only permitted when the unit has no
+    active (non-archived) assignments. Returns False if active assignments exist.
+    """
+    with Session(engine) as session:
+        active = session.exec(
+            select(StorageAssignment).where(
+                StorageAssignment.unit_id == unit_id,
+                StorageAssignment.archived_at == None,  # noqa: E711
+            )
+        ).first()
+        if active:
+            return False
+        unit = session.get(StorageUnit, unit_id)
+        if unit:
+            session.delete(unit)
+            session.commit()
+        return True
+
+
+def get_all_storage_units() -> list:
+    """Returns all active storage units ordered by unit_number."""
+    with Session(engine) as session:
+        return session.exec(
+            select(StorageUnit)
+            .where(StorageUnit.is_active == True)  # noqa: E712
+            .order_by(StorageUnit.unit_number)
+        ).all()
+
+
+def get_active_storage_assignments() -> list:
+    """
+    Returns all non-archived storage assignments joined with their unit.
+    Ordered by assigned_at descending (most recent first).
+    """
+    with Session(engine) as session:
+        return session.exec(
+            select(StorageAssignment)
+            .where(StorageAssignment.archived_at == None)  # noqa: E711
+            .order_by(desc(StorageAssignment.assigned_at))
+        ).all()
+
+
+def get_archived_storage_assignments() -> list:
+    """Returns all archived storage assignments ordered by archived_at descending."""
+    with Session(engine) as session:
+        return session.exec(
+            select(StorageAssignment)
+            .where(StorageAssignment.archived_at != None)  # noqa: E711
+            .order_by(desc(StorageAssignment.archived_at))
+        ).all()
+
+
+def create_storage_assignment(
+    unit_id: int,
+    assigned_to_name: Optional[str],
+    user_account_number: Optional[int],
+    item_description: Optional[str],
+    notes: Optional[str],
+    charges_owed: bool,
+    charge_type: Optional[str],
+    charge_unit_count: Optional[float],
+    charge_cost_per_unit: Optional[float],
+    charge_notes: Optional[str],
+) -> StorageAssignment:
+    """
+    Creates a new storage assignment linking a unit to an occupant.
+    charge_total is computed here from count * cost_per_unit when charges apply.
+    """
+    charge_total = None
+    if charges_owed and charge_unit_count and charge_cost_per_unit:
+        charge_total = round(charge_unit_count * charge_cost_per_unit, 2)
+
+    with Session(engine) as session:
+        assignment = StorageAssignment(
+            unit_id=unit_id,
+            assigned_to_name=assigned_to_name,
+            user_account_number=user_account_number,
+            item_description=item_description,
+            notes=notes,
+            charges_owed=charges_owed,
+            charge_type=charge_type,
+            charge_unit_count=charge_unit_count,
+            charge_cost_per_unit=charge_cost_per_unit,
+            charge_total=charge_total,
+            charge_notes=charge_notes,
+        )
+        session.add(assignment)
+        session.commit()
+        session.refresh(assignment)
+        return assignment
+
+
+def archive_storage_assignment(assignment_id: int) -> bool:
+    """
+    Archives a storage assignment by setting archived_at to now.
+    Returns False if the assignment does not exist or is already archived.
+    """
+    with Session(engine) as session:
+        assignment = session.get(StorageAssignment, assignment_id)
+        if not assignment or assignment.archived_at is not None:
+            return False
+        assignment.archived_at = datetime.now()
+        session.add(assignment)
+        session.commit()
+        return True
+
+
+def get_storage_unit_by_id(unit_id: int) -> Optional[StorageUnit]:
+    """Returns a single storage unit by primary key, or None."""
+    with Session(engine) as session:
+        return session.get(StorageUnit, unit_id)
+
+
+# --- Inventory ---
+
+
+def get_all_inventory_items() -> list:
+    """Returns all active inventory items ordered alphabetically by name."""
+    with Session(engine) as session:
+        return session.exec(
+            select(InventoryItem)
+            .where(InventoryItem.is_active == True)  # noqa: E712
+            .order_by(InventoryItem.name)
+        ).all()
+
+
+def create_inventory_item(
+    name: str, description: Optional[str], price: float
+) -> InventoryItem:
+    """Creates and persists a new active inventory item."""
+    with Session(engine) as session:
+        item = InventoryItem(
+            name=name, description=description, price=price, is_active=True
+        )
+        session.add(item)
+        session.commit()
+        session.refresh(item)
+        return item
+
+
+def delete_inventory_item(item_id: int) -> None:
+    """Permanently removes an inventory item by primary key."""
+    with Session(engine) as session:
+        item = session.get(InventoryItem, item_id)
+        if item:
+            session.delete(item)
+            session.commit()

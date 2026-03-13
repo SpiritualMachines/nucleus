@@ -118,6 +118,9 @@ def run_migrations():
         # squaretransaction table — new table for Point of Sale transaction records.
         # No column migrations needed; create_db_and_tables() creates the whole table.
 
+        # producttier table — new table for reusable membership/day pass tier templates.
+        # No column migrations needed; create_db_and_tables() creates the whole table.
+
         # posconfig table — new table for Square Terminal API configuration.
         # No column migrations needed for the initial table creation.
         # Separate sandbox and production token columns added after initial release.
@@ -129,3 +132,18 @@ def run_migrations():
         )
         # Remove the legacy single-token column — replaced by the per-environment fields.
         _verify_and_drop_column(session, "posconfig", "square_access_token")
+
+        # user table — Square subscription tracking fields added for recurring billing.
+        _verify_and_add_column(session, "user", "square_customer_id", "VARCHAR")
+        _verify_and_add_column(session, "user", "square_subscription_id", "VARCHAR")
+        _verify_and_add_column(session, "user", "square_subscription_status", "VARCHAR")
+        _verify_and_add_column(session, "user", "square_subscription_checked_at", "DATETIME")
+
+        # storageunit and storageassignment tables — new tables for member storage tracking.
+        # No column migrations needed for new tables; create_db_and_tables() handles them.
+        # Column renames and additions for existing storageassignment records:
+        _verify_and_add_column(session, "storageassignment", "charge_type", "VARCHAR")
+        _verify_and_add_column(session, "storageassignment", "charge_notes", "TEXT")
+
+        # inventoryitem table — new table for POS transaction cart items.
+        # No column migrations needed; create_db_and_tables() creates the table.

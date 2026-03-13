@@ -31,6 +31,7 @@ class LoginScreen(Screen):
                 variant="primary",
                 id="register_btn",
             )
+            yield Label("Other Options", classes="login-section-label")
             yield Button(
                 "Community Contacts",
                 variant="default",

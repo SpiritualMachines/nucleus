@@ -7,6 +7,7 @@ from textual.screen import ModalScreen
 from textual.widgets import (
     Button,
     Checkbox,
+    Collapsible,
     DataTable,
     Input,
     Label,
@@ -47,6 +48,7 @@ MEMBER_ACTIONS = [
     "Add Day Pass",
     "View Day Pass History",
     "Edit Sign Ins",
+    "Activate Square Subscription",
 ]
 
 
@@ -186,6 +188,10 @@ class MemberActionModal(ModalScreen):
             self.app.push_screen(DayPassHistoryModal(self.acct_num))
         elif idx == 6:
             self.app.push_screen(ManageSignInsModal(self.acct_num))
+        elif idx == 7:
+            self.app.push_screen(
+                ActivateSubscriptionModal(self.acct_num), self.chain_refresh
+            )
 
     def on_button_pressed(self, event: Button.Pressed):
         if event.button.id == "btn_close":
@@ -277,6 +283,8 @@ class TransactionModal(ModalScreen):
         self.user_id = user_id
         self.initial_type = initial_type
         self.currency_name = currency_name
+        # Load current balance so staff can see it before adjusting
+        self.current_balance = services.get_user_balance(user_id)
         # Load POS config only for credit type (payment processing)
         self.square_enabled = False
         if initial_type == "credit":
@@ -284,11 +292,16 @@ class TransactionModal(ModalScreen):
             self.square_enabled = pos_cfg.square_enabled
 
     def compose(self) -> ComposeResult:
-        with Vertical(classes="login-container"):
+        with Vertical(classes="splash-container scrollable"):
             if self.initial_type == "credit":
                 yield Label(f"Add {self.currency_name}", classes="title")
             else:
                 yield Label(f"Deduct {self.currency_name}", classes="title")
+
+            yield Label(
+                f"Current Balance: ${self.current_balance:.2f}",
+                classes="subtitle",
+            )
 
             yield Label("Amount ($):")
             yield Input(placeholder="0.00", type="number", id="txn_amount")
@@ -353,9 +366,10 @@ class TransactionModal(ModalScreen):
                     # Process with Square
                     try:
                         square_service.process_terminal_checkout(
-                            amount_cents=int(amount * 100),
+                            amount=amount,
                             customer_name=customer_name,
                             customer_email=customer_email,
+                            customer_phone=None,
                             description=desc,
                         )
                         self.app.notify(f"{self.currency_name} Added via Square")
@@ -365,9 +379,10 @@ class TransactionModal(ModalScreen):
                     # Record cash payment
                     try:
                         square_service.record_cash_payment(
-                            amount_cents=int(amount * 100),
+                            amount=amount,
                             customer_name=customer_name,
                             customer_email=customer_email,
+                            customer_phone=None,
                             description=desc,
                         )
                         self.app.notify(f"{self.currency_name} Added via Cash")
@@ -387,20 +402,69 @@ class TransactionModal(ModalScreen):
             self.app.notify("Invalid Amount", severity="error")
 
 
+class ViewCreditsModal(ModalScreen):
+    """Read-only view of a user's current credit balance and full transaction history."""
+
+    def __init__(self, user_id: int, currency_name: str = "Credits"):
+        super().__init__()
+        self.user_id = user_id
+        self.currency_name = currency_name
+        self.balance = services.get_user_balance(user_id)
+        self.transactions = services.get_user_transactions(user_id)
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="splash-container"):
+            yield Label(f"{self.currency_name} Balance", classes="title")
+            yield Label(
+                f"Current Balance: ${self.balance:.2f}",
+                classes="subtitle",
+                id="balance_display",
+            )
+            yield Label("Transaction History:", classes="subtitle")
+            yield DataTable(id="credits_history_table")
+            with Horizontal(classes="filter-row"):
+                yield Button("Close", id="btn_close")
+
+    def on_mount(self) -> None:
+        table = self.query_one("#credits_history_table", DataTable)
+        table.add_columns("Date", "Type", "Amount", "Description")
+        for txn in self.transactions:
+            table.add_row(
+                txn.date.strftime("%Y-%m-%d %H:%M"),
+                txn.credit_debit.capitalize(),
+                f"${txn.credits:.2f}",
+                txn.description or "",
+            )
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn_close":
+            self.dismiss()
+
+
 class AddMembershipModal(ModalScreen):
     def __init__(self, user_id: int):
         super().__init__()
         self.user_id = user_id
         pos_cfg = square_service.get_pos_config()
         self.square_enabled = pos_cfg.square_enabled
+        # Load all active membership tiers for the optional tier selector
+        self._tiers = services.get_product_tiers("membership")
+        # Holds the ID of the selected tier, or None when using Custom entry
+        self._selected_tier_id = None
 
     def compose(self) -> ComposeResult:
         today = datetime.now()
         next_month = today + timedelta(days=30)
         current_month_name = today.strftime("%B")
 
-        with Vertical(classes="login-container"):
+        with Vertical(classes="splash-container scrollable"):
             yield Label("Add Membership", classes="title")
+
+            yield Label("Membership Tier (optional):")
+            tier_options = [("Custom", "0")] + [
+                (t.name, str(t.id)) for t in self._tiers
+            ]
+            yield Select(tier_options, id="mem_tier_select", value="0")
 
             yield Label("Start Date (YYYY-MM-DD):")
             yield Input(today.strftime("%Y-%m-%d"), id="mem_start")
@@ -424,6 +488,26 @@ class AddMembershipModal(ModalScreen):
                 yield Button("Record as Cash", variant="warning", id="btn_pay_cash")
             with Horizontal(classes="filter-row"):
                 yield Button("Cancel", id="btn_cancel")
+
+    def on_select_changed(self, event: Select.Changed):
+        """Auto-fill form fields when a tier is selected from the dropdown."""
+        if event.select.id != "mem_tier_select":
+            return
+        if event.value == "0" or event.value is Select.BLANK:
+            # Custom — clear auto-filled marker but leave current values intact
+            self._selected_tier_id = None
+            return
+        tier = services.get_product_tier(int(event.value))
+        if not tier:
+            return
+        self._selected_tier_id = tier.id
+        today = datetime.now()
+        self.query_one("#mem_start", Input).value = today.strftime("%Y-%m-%d")
+        if tier.duration_days:
+            end_date = today + timedelta(days=tier.duration_days)
+            self.query_one("#mem_end", Input).value = end_date.strftime("%Y-%m-%d")
+        self.query_one("#mem_desc", Input).value = tier.name
+        self.query_one("#mem_amount", Input).value = str(tier.price)
 
     def on_button_pressed(self, event: Button.Pressed):
         if event.button.id == "btn_cancel":
@@ -481,9 +565,10 @@ class AddMembershipModal(ModalScreen):
                 if payment_method == "square":
                     try:
                         square_service.process_terminal_checkout(
-                            amount_cents=int(amount * 100),
+                            amount=amount,
                             customer_name=customer_name,
                             customer_email=customer_email,
+                            customer_phone=None,
                             description=f"Membership: {desc_str}",
                         )
                         self.app.notify(
@@ -494,9 +579,10 @@ class AddMembershipModal(ModalScreen):
                 elif payment_method == "cash":
                     try:
                         square_service.record_cash_payment(
-                            amount_cents=int(amount * 100),
+                            amount=amount,
                             customer_name=customer_name,
                             customer_email=customer_email,
+                            customer_phone=None,
                             description=f"Membership: {desc_str}",
                         )
                         self.app.notify(
@@ -508,6 +594,17 @@ class AddMembershipModal(ModalScreen):
                         )
             else:
                 self.app.notify(f"Added membership ({desc_str}) - No payment recorded")
+
+            # Apply consumables credits bundled with the selected tier, if any
+            if self._selected_tier_id is not None:
+                tier = services.get_product_tier(self._selected_tier_id)
+                if tier and tier.consumables_credits and tier.consumables_credits > 0:
+                    services.add_transaction(
+                        self.user_id,
+                        tier.consumables_credits,
+                        "credit",
+                        f"Consumables credits included with {tier.name}",
+                    )
 
             self.dismiss(True)
         except ValueError:
@@ -655,10 +752,19 @@ class AddDayPassModal(ModalScreen):
         self.user_id = user_id
         pos_cfg = square_service.get_pos_config()
         self.square_enabled = pos_cfg.square_enabled
+        # Load all active day pass tiers for the optional tier selector
+        self._tiers = services.get_product_tiers("daypass")
 
     def compose(self) -> ComposeResult:
-        with Vertical(classes="login-container"):
+        with Vertical(classes="splash-container scrollable"):
             yield Label("Add Day Pass", classes="title")
+
+            yield Label("Day Pass Tier (optional):")
+            tier_options = [("Custom", "0")] + [
+                (t.name, str(t.id)) for t in self._tiers
+            ]
+            yield Select(tier_options, id="dp_tier_select", value="0")
+
             yield Label("Date (YYYY-MM-DD):")
             yield Input(datetime.now().strftime("%Y-%m-%d"), id="dp_date")
 
@@ -680,6 +786,18 @@ class AddDayPassModal(ModalScreen):
                 yield Button("Record as Cash", variant="warning", id="btn_pay_cash")
             with Horizontal(classes="filter-row"):
                 yield Button("Cancel", id="btn_cancel")
+
+    def on_select_changed(self, event: Select.Changed):
+        """Auto-fill description and amount when a day pass tier is selected."""
+        if event.select.id != "dp_tier_select":
+            return
+        if event.value == "0" or event.value is Select.BLANK:
+            return
+        tier = services.get_product_tier(int(event.value))
+        if not tier:
+            return
+        self.query_one("#dp_desc", Input).value = tier.name
+        self.query_one("#dp_amount", Input).value = str(tier.price)
 
     def on_button_pressed(self, event: Button.Pressed):
         if event.button.id == "btn_cancel":
@@ -718,9 +836,10 @@ class AddDayPassModal(ModalScreen):
                 if payment_method == "square":
                     try:
                         square_service.process_terminal_checkout(
-                            amount_cents=int(amount * 100),
+                            amount=amount,
                             customer_name=customer_name,
                             customer_email=customer_email,
+                            customer_phone=None,
                             description=desc,
                         )
                         self.app.notify("Day Pass Added - Square payment processed")
@@ -729,9 +848,10 @@ class AddDayPassModal(ModalScreen):
                 elif payment_method == "cash":
                     try:
                         square_service.record_cash_payment(
-                            amount_cents=int(amount * 100),
+                            amount=amount,
                             customer_name=customer_name,
                             customer_email=customer_email,
+                            customer_phone=None,
                             description=desc,
                         )
                         self.app.notify("Day Pass Added - Cash payment recorded")
@@ -883,10 +1003,6 @@ class ManageSignInsModal(ModalScreen):
     """
 
     CSS = """
-    ManageSignInsModal .splash-container {
-        height: auto;
-        max-height: 95%;
-    }
     ManageSignInsModal #table_section {
         height: 12;
         border: solid $secondary;
@@ -1373,3 +1489,255 @@ class PeriodTractionReportModal(ModalScreen):
             self.app.notify("Invalid date format. Use YYYY-MM-DD.", severity="error")
         except Exception as e:
             self.app.notify(f"Export Failed: {str(e)}", severity="error")
+
+
+class ActivateSubscriptionModal(ModalScreen):
+    """
+    Confirms and initiates a Square recurring subscription for a member.
+
+    Square handles billing entirely: it emails the member a payment link for
+    each billing cycle. Nucleus stores the subscription ID returned by Square
+    and polls the status daily to determine whether access should remain active.
+    No card data is passed to or stored in Nucleus.
+    """
+
+    def __init__(self, acct_num: int):
+        super().__init__()
+        self.acct_num = acct_num
+
+    def compose(self) -> ComposeResult:
+        user = services.get_user_by_account(self.acct_num)
+        plan_variation_id = services.get_setting("square_subscription_plan_variation_id", "")
+        timezone = services.get_setting("square_subscription_timezone", "America/Toronto")
+
+        with Vertical(classes="splash-container"):
+            yield Label("Activate Square Subscription", classes="title")
+
+            if user:
+                name = f"{user.first_name} {user.last_name}"
+                yield Label(f"Member: {name}", classes="subtitle")
+                yield Label(f"Account: #{self.acct_num}", classes="subtitle")
+                yield Label(f"Email: {user.email}", classes="subtitle")
+
+                if user.square_subscription_id:
+                    yield Label(
+                        f"Note: this member already has a subscription on file "
+                        f"(ID: {user.square_subscription_id}, "
+                        f"Status: {user.square_subscription_status or 'unknown'}). "
+                        "Activating will create a new subscription.",
+                        classes="text-muted",
+                    )
+
+            yield Label("")
+
+            if not plan_variation_id:
+                yield Label(
+                    "No Plan Variation ID is configured. "
+                    "Go to Settings > Subscriptions to set one before activating.",
+                    classes="text-error",
+                )
+                with Horizontal(classes="filter-row"):
+                    yield Button("Close", variant="error", id="btn_cancel")
+            else:
+                yield Label("Square Plan Variation ID:")
+                yield Label(plan_variation_id, classes="text-muted")
+                yield Label(f"Billing Timezone: {timezone}", classes="text-muted")
+                yield Label("")
+                yield Label(
+                    "Square will email the member a payment link. "
+                    "No payment details are stored in Nucleus.",
+                    classes="text-muted",
+                )
+                with Horizontal(classes="filter-row"):
+                    yield Button(
+                        "Activate Square Membership Subscription",
+                        variant="success",
+                        id="btn_confirm",
+                    )
+                    yield Button("Cancel", variant="error", id="btn_cancel")
+
+    def on_button_pressed(self, event: Button.Pressed):
+        if event.button.id == "btn_cancel":
+            self.dismiss(False)
+        elif event.button.id == "btn_confirm":
+            plan_variation_id = services.get_setting(
+                "square_subscription_plan_variation_id", ""
+            )
+            timezone = services.get_setting(
+                "square_subscription_timezone", "America/Toronto"
+            )
+            ok, msg = square_service.activate_square_subscription(
+                self.acct_num, plan_variation_id, timezone
+            )
+            if ok:
+                self.app.notify(msg, severity="information")
+                self.dismiss(True)
+            else:
+                self.app.notify(msg, severity="error")
+
+
+class StorageAssignModal(ModalScreen):
+    """
+    Modal for assigning an occupant and item details to a storage unit.
+    Staff select the target unit from a dropdown populated at open time,
+    then enter a freeform name or search for a registered member.
+    The charges section is hidden until the 'Charges Owed' checkbox is ticked.
+    On submit the modal dismisses with True so the caller can reload its table.
+    """
+
+    def __init__(self, units: list, **kwargs):
+        """
+        units -- list of StorageUnit instances to populate the unit selector.
+        """
+        super().__init__(**kwargs)
+        self.units = units
+        # Account number resolved when staff selects a row from the member search
+        self._resolved_acct: int | None = None
+
+    def compose(self) -> ComposeResult:
+        unit_options = [(f"{u.unit_number} - {u.description}", u.id) for u in self.units]
+        with Vertical(classes="splash-container"):
+            yield Label("Assign to Storage Unit", classes="title")
+            with VerticalScroll(classes="splash-content"):
+                yield Label("Storage Unit:")
+                yield Select(unit_options, id="storage_unit_select")
+
+                yield Label("Assigned To (name, or search for a user below):")
+                yield Input(placeholder="First and Last Name", id="storage_name")
+
+                yield Label("Search User (optional):")
+                with Horizontal(classes="search-row"):
+                    yield Input(placeholder="Name or email...", id="storage_search")
+                    yield Button("Search", id="btn_storage_search")
+                    yield Button("Clear Search", id="btn_storage_clear_search")
+                yield DataTable(id="storage_search_table")
+
+                yield Label("Item Description:")
+                yield Input(placeholder="What is being stored?", id="storage_item_desc")
+
+                yield Label("Notes (optional):")
+                yield Input(placeholder="Any additional notes", id="storage_notes")
+
+                with Collapsible(title="Charges Owed", id="storage_charges_collapsible", collapsed=True):
+                    yield Label("Charge Type:")
+                    yield Input(placeholder="e.g. Filament, Large Format Printer", id="storage_charge_type")
+                    yield Label("Number of Units:")
+                    yield Input(placeholder="1", id="storage_charge_unit_count", type="number")
+                    yield Label("Cost per Unit ($):")
+                    yield Input(placeholder="0.00", id="storage_charge_cost_per_unit", type="number")
+                    yield Label("Total: $0.00", id="storage_charge_total_lbl")
+                    yield Label("Charge Notes (optional):")
+                    yield Input(placeholder="Additional details about the charges", id="storage_charge_notes")
+
+                with Horizontal(classes="filter-row"):
+                    yield Button("Assign", variant="success", id="btn_storage_assign")
+                    yield Button("Cancel", variant="error", id="btn_storage_cancel")
+
+    def on_mount(self):
+        # Set up the member search results table
+        table = self.query_one("#storage_search_table", DataTable)
+        table.add_columns("Acct #", "Name", "Email")
+        table.cursor_type = "row"
+
+    def on_input_changed(self, event: Input.Changed):
+        """Recalculate and display the charge total whenever a charge amount field changes."""
+        if event.input.id in ("storage_charge_unit_count", "storage_charge_cost_per_unit"):
+            self._update_charge_total()
+
+    def _update_charge_total(self):
+        try:
+            count = float(self.query_one("#storage_charge_unit_count", Input).value or "0")
+            cost = float(self.query_one("#storage_charge_cost_per_unit", Input).value or "0")
+            total = round(count * cost, 2)
+            self.query_one("#storage_charge_total_lbl").update(f"Total: ${total:.2f}")
+        except (ValueError, TypeError):
+            self.query_one("#storage_charge_total_lbl").update("Total: $0.00")
+
+    def on_button_pressed(self, event: Button.Pressed):
+        if event.button.id == "btn_storage_cancel":
+            self.dismiss(False)
+        elif event.button.id == "btn_storage_search":
+            self._search_users()
+        elif event.button.id == "btn_storage_clear_search":
+            self._clear_search()
+        elif event.button.id == "btn_storage_assign":
+            self._submit()
+
+    def _search_users(self):
+        query = self.query_one("#storage_search", Input).value.strip()
+        if not query:
+            self.app.notify("Enter a name or email to search.", severity="warning")
+            return
+        table = self.query_one("#storage_search_table", DataTable)
+        table.clear()
+        self._resolved_acct = None
+        results = services.search_users(query)
+        if not results:
+            self.app.notify("No users found.", severity="warning")
+            return
+        for u in results:
+            table.add_row(str(u.account_number), f"{u.first_name} {u.last_name}", u.email)
+
+    def _clear_search(self):
+        """Clears the search input, results table, and resolved account."""
+        self.query_one("#storage_search", Input).value = ""
+        self.query_one("#storage_search_table", DataTable).clear()
+        self._resolved_acct = None
+        self.query_one("#storage_name", Input).value = ""
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected):
+        if event.data_table.id == "storage_search_table":
+            row_data = event.data_table.get_row(event.row_key)
+            self._resolved_acct = int(row_data[0])
+            name = str(row_data[1])
+            self.query_one("#storage_name", Input).value = name
+            self.app.notify(f"Selected: {name}")
+
+    def _submit(self):
+        unit_value = self.query_one("#storage_unit_select", Select).value
+        if unit_value is Select.BLANK:
+            self.app.notify("Select a storage unit.", severity="error")
+            return
+        unit_id = int(unit_value)
+
+        assigned_to_name = self.query_one("#storage_name", Input).value.strip() or None
+        item_description = self.query_one("#storage_item_desc", Input).value.strip() or None
+        notes = self.query_one("#storage_notes", Input).value.strip() or None
+        collapsible = self.query_one("#storage_charges_collapsible", Collapsible)
+        charges_owed = not collapsible.collapsed
+
+        charge_type = None
+        charge_unit_count = None
+        charge_cost_per_unit = None
+        charge_notes = None
+
+        if charges_owed:
+            charge_type = self.query_one("#storage_charge_type", Input).value.strip() or None
+            try:
+                charge_unit_count = float(
+                    self.query_one("#storage_charge_unit_count", Input).value or "0"
+                )
+            except ValueError:
+                charge_unit_count = None
+            try:
+                charge_cost_per_unit = float(
+                    self.query_one("#storage_charge_cost_per_unit", Input).value or "0"
+                )
+            except ValueError:
+                charge_cost_per_unit = None
+            charge_notes = self.query_one("#storage_charge_notes", Input).value.strip() or None
+
+        services.create_storage_assignment(
+            unit_id=unit_id,
+            assigned_to_name=assigned_to_name,
+            user_account_number=self._resolved_acct,
+            item_description=item_description,
+            notes=notes,
+            charges_owed=charges_owed,
+            charge_type=charge_type,
+            charge_unit_count=charge_unit_count,
+            charge_cost_per_unit=charge_cost_per_unit,
+            charge_notes=charge_notes,
+        )
+        self.app.notify("Storage assignment saved.")
+        self.dismiss(True)

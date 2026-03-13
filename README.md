@@ -4,7 +4,7 @@ A membership management application for hackerspaces and makerspaces.
 Built with a fast-to-deploy terminal UI and a platform-agnostic core library
 designed to support a future web frontend.
 
-**Current version:** 0.9.72
+**Current version:** 0.9.73
 **License:** AGPLv3
 
 ---
@@ -21,13 +21,27 @@ designed to support a future web frontend.
 
 - Member registration, approval, and profile management
 - Membership tracking with automatic expiry and role downgrade
+- Reusable membership and day pass tier templates with auto-fill pricing and credit grants
 - Space sign-in and sign-out with visit type categorisation
-- Day pass and consumables/credits ledger
-- Safety training records (Orientation, WHMIS)
+- Post sign-in/out auto-logout with configurable countdown and cancel option
+- Day pass and consumables/credits ledger with full transaction history
+- Safety training records
 - Member feedback with staff response
-- CSV and PDF exports for reports
+- Walk-in community contact form accessible without a member account
+- Admin settings for runtime configuration (branding, security, operations, and more)
+- Period Traction, Community Contacts, and full People data export reports (CSV and PDF)
+- Daily membership summary email via Resend API
+- Square Terminal integration for card and contactless payments
+- Square recurring membership subscriptions with invoice-based billing
+- Inventory cart for point-of-sale transactions
+- Member storage unit tracking
+- Manual cash transaction recording with audit trail
 - Staff and Admin tools including raw SQL console
 - Automated daily database backups
+
+See [USER_MANUAL.md](USER_MANUAL.md) for full feature documentation and setup guides.
+
+---
 
 ## Tech Stack
 
@@ -40,19 +54,43 @@ designed to support a future web frontend.
 | PDF Export | fpdf2 |
 | Email Validation | email-validator |
 | Email Delivery | resend |
+| Point of Sale | squareup |
+
+---
 
 ## Requirements
 
 - Python 3.12
 - See `requirements.txt` for all dependencies
 
-## Setup
+---
+
+## Installation
 
 ```bash
 python -m venv venv
-source venv/bin/activate
+source venv/bin/activate      # Linux / macOS
+# venv\Scripts\activate       # Windows
 pip install -r requirements.txt
 ```
+
+Copy `.env.example` to `.env` and set any environment-specific values before running.
+
+---
+
+## First-Time Setup
+
+```bash
+# Create the initial admin account
+./scripts/create_admin.py
+
+# (Optional) Seed test data for development
+./scripts/seed_dummy_data.py
+```
+
+**Security:** Delete `create_admin.py`, `promote_superuser.py`, and `seed_dummy_data.py` from production installations after setup. Keep `update.py` and `poll_subscriptions.py` for ongoing maintenance.
+
+---
 
 ## Running
 
@@ -60,9 +98,23 @@ pip install -r requirements.txt
 # Standard
 python nucleus.py
 
-# Dev mode (Textual live reload)
+# Dev mode (Textual live reload + console)
 textual run --dev nucleus.py
+textual console
 ```
+
+---
+
+## Updating an Existing Installation
+
+```bash
+# Back up the database and apply pending schema migrations
+./scripts/update.py
+```
+
+Run this script whenever pulling a new version. It creates a timestamped backup in `/backups/` and applies any pending column migrations automatically.
+
+---
 
 ## Scripts
 
@@ -70,91 +122,33 @@ textual run --dev nucleus.py
 |---|---|
 | `./scripts/create_admin.py` | Create the initial admin account |
 | `./scripts/promote_superuser.py` | Promote an existing account to Admin |
-| `./scripts/seed_dummy_data.py` | Seed test member data |
+| `./scripts/seed_dummy_data.py` | Seed test member data (development only) |
 | `./scripts/update.py` | Back up and migrate an existing deployed database |
-**Security Warning: Delete the scripts directory after setup or migration after an update.**
+| `./scripts/poll_subscriptions.py` | Poll Square for current subscription status of all enrolled members |
 
-## Email Reports (Resend)
-
-Nucleus can send a daily membership summary email using the [Resend](https://resend.com) API.
-
-### Setup
-
-1. Create a free account at [resend.com](https://resend.com) and obtain an API key from the dashboard.
-2. Optionally verify a sending domain in the Resend dashboard. Until a domain is verified, use `onboarding@resend.dev` as the From address (Resend's shared test sender — delivers only to the account owner's email).
-3. Log in to Nucleus as an admin and open **Settings > Email and Notifications**.
-4. Enter your Resend API key — it will be visible while you type and permanently hidden after you save.
-5. Set the **From Email** (your verified domain address or `onboarding@resend.dev` for testing).
-6. Set the **Send Daily Report To** address — the inbox where daily reports should arrive.
-7. Tick **Enable Daily Email Reports** and click **Save Email Settings**.
-8. Click **Send Test Email** to confirm delivery before relying on the automated schedule.
-
-The daily report is sent automatically each morning when the app is running. It includes active member count, pending approvals, memberships expiring within 7 days, and sign-ins for the day.
-
-## Square Terminal (Point of Sale)
-
-Nucleus can process card payments through a paired Square Terminal device using the Square Terminal API.
-
-### Requirements
-
-- A [Square developer account](https://developer.squareup.com) with a Sandbox or Production application.
-- The `squareup` Python package (included in `requirements.txt`).
-- A Square Terminal device (1st or 2nd generation) running firmware that supports Terminal API peripheral mode.
-
-### API Credentials Setup
-
-1. Log in to the [Square Developer Dashboard](https://developer.squareup.com/apps).
-2. Open your application and copy the **Access Token** for Sandbox (for testing) or Production.
-3. Find your **Location ID** under Locations in the dashboard.
-4. Log in to Nucleus as an admin and open **Settings > Point of Sale**.
-5. Paste the Sandbox token and click **Save Sandbox Token**. Repeat for Production if needed.
-6. Enter your Location ID and select the active environment (Sandbox or Production).
-7. Click **Save POS Settings**.
-
-### Pairing a Terminal Device
-
-The Square Terminal must be paired once per installation to enter Terminal API peripheral mode. After pairing the terminal will display a blank screen with the Square logo and wait for checkout requests from Nucleus.
-
-1. In Nucleus, open **Settings > Point of Sale** and click **Pair Terminal**.
-   A short pairing code will appear on screen.
-2. On the Square Terminal, tap the three-dot menu (top-right corner).
-3. Go to **Settings > Device** and tap **Pair for Terminal API**.
-4. Enter the code shown in Nucleus and confirm on the terminal.
-5. Back in Nucleus, click **Check Pairing Status**. When pairing succeeds, the Device ID is shown — paste it into the **Device ID** field and click **Save POS Settings**.
-
-**Note:** Pairing is per-installation. If you move the terminal to a different host or re-install Nucleus, repeat the pairing steps. The terminal can only be paired to one application at a time. To unpair, factory-reset the terminal or remove it from the Square Dashboard under Devices.
-
-### Processing Transactions
-
-Staff and admin users can process transactions from the **Purchases** tab.
-
-- **Send to Square Terminal**: Sends the amount to the paired terminal for card or contactless payment.
-- **Record Cash Transaction**: Records a cash payment locally without contacting the terminal. The description is prefixed with "Cash -" for easy identification in reports.
-- **Check Terminal Status**: Fetches the current checkout status from Square for a selected transaction row.
-
-All transactions — Square and cash — are stored in the local database for audit and reporting purposes.
-
-## Database Migrations
-
-Schema migrations are managed via `run_migrations()` in `core/database.py`.
-This runs automatically on every app launch. When deploying an update to an
-existing installation, run `./scripts/update.py` to create a backup and
-apply any pending migrations manually.
-
-When adding a new column to a model in `/core/models.py`, register it in
-`run_migrations()` using `_verify_and_add_column()`.
+---
 
 ## Project Structure
 
 ```
-/nucleus.py        Main app entry point (Textual App class)
-/core              Business logic and database models (no UI dependencies)
-/screens           Textual UI screens and modals
-/scripts           Admin and setup utilities
-/theme             CSS (.tcss), policy documents, and settings
-/backups           Automated daily and pre-migration database backups
-/tests             Pytest suite
+nucleus.py         Main app entry point (Textual App class)
+core/              Business logic and database models (no UI dependencies)
+screens/           Textual UI screens and modals
+scripts/           Admin and setup utilities
+theme/             CSS (.tcss), policy documents, and settings
+backups/           Automated daily and pre-migration database backups
+tests/             Pytest suite
 ```
+
+---
+
+## Database Migrations
+
+Schema migrations run automatically on every app launch via `run_migrations()` in `core/database.py`. For production deployments, run `./scripts/update.py` before restarting the app to create a backup and ensure all migrations are applied.
+
+When contributing new model columns, register them in `run_migrations()` using `_verify_and_add_column()`.
+
+---
 
 ## License
 

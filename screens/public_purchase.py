@@ -13,15 +13,24 @@ from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
 from textual.widgets import Button, DataTable, Input, Label
 
-from core import square_service
+from core import services, square_service
 
 
 class PublicPurchaseModal(ModalScreen):
     """
     Walk-in payment form accessible from the login screen without requiring a
     member account. Supports Square Terminal checkout and cash recording.
+    Includes the inventory cart so staff can build a transaction from preset
+    items rather than typing amounts and descriptions manually.
     The recent transaction table shows no customer-identifying information.
     """
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        # Per-instance cart state — list of {id, name, qty, unit_price}
+        self._cart: list = []
+        self._inv_selected_item: dict = None
+        self._inv_selected_cart_item_id: int = None
 
     def compose(self) -> ComposeResult:
         pos_cfg = square_service.get_pos_config()
@@ -34,28 +43,66 @@ class PublicPurchaseModal(ModalScreen):
         with Vertical(classes="splash-container"):
             yield Label("Manual Purchase", classes="title")
             with VerticalScroll(classes="splash-content"):
-                yield Label("Amount ($):")
-                yield Input(placeholder="0.00", id="pp_amount", type="number")
 
-                yield Label("Customer Name:")
-                yield Input(placeholder="First and Last Name", id="pp_customer_name")
+                # Step 1: Inventory Cart
+                with Vertical(classes="form-subsection"):
+                    yield Label("Step 1: Select Items (Optional)", classes="subtitle")
+                    yield Label(
+                        "Click an item row to select it, set the quantity,"
+                        " then click Add to Cart."
+                        " Amount and Description are auto-filled."
+                    )
+                    yield DataTable(id="pp_inv_available_table")
+                    with Horizontal(classes="filter-row"):
+                        yield Label("Quantity:")
+                        yield Input("1", id="pp_inv_qty", type="number")
+                        yield Button(
+                            "Add to Cart", variant="primary", id="btn_pp_add_to_cart"
+                        )
+                    yield Label("Cart:", classes="subtitle")
+                    yield DataTable(id="pp_inv_cart_table")
+                    with Horizontal(classes="filter-row"):
+                        yield Label("Cart Total: $0.00", id="pp_inv_cart_total_lbl")
+                        yield Button(
+                            "Remove Selected",
+                            variant="error",
+                            id="btn_pp_remove_from_cart",
+                            disabled=True,
+                        )
+                        yield Button("Clear Cart", id="btn_pp_clear_cart")
 
-                yield Label("Customer Email (optional):")
-                yield Input(placeholder="customer@example.com", id="pp_customer_email")
+                # Step 2: Transaction Details
+                with Vertical(classes="form-subsection"):
+                    yield Label("Step 2: Transaction Details", classes="subtitle")
+                    yield Label(
+                        "Auto-filled from cart. Edit as needed or enter manually."
+                    )
+                    yield Label("Amount ($):")
+                    yield Input(placeholder="0.00", id="pp_amount", type="number")
+                    yield Label("Description:")
+                    yield Input(
+                        placeholder="What is this transaction for?", id="pp_description"
+                    )
 
-                yield Label("Customer Phone (optional):")
-                yield Input(placeholder="Phone number", id="pp_customer_phone")
-
-                yield Label("Description:")
-                yield Input(
-                    placeholder="What is this transaction for?", id="pp_description"
-                )
+                # Step 3: Customer Details
+                with Vertical(classes="form-subsection"):
+                    yield Label("Step 3: Customer Details", classes="subtitle")
+                    yield Label("Customer Name:")
+                    yield Input(
+                        placeholder="First and Last Name", id="pp_customer_name"
+                    )
+                    yield Label(
+                        "Customer Email (required to send a receipt for cash transactions):"
+                    )
+                    yield Input(
+                        placeholder="customer@example.com", id="pp_customer_email"
+                    )
+                    yield Label("Customer Phone (optional):")
+                    yield Input(placeholder="Phone number", id="pp_customer_phone")
 
                 with Horizontal(classes="filter-row"):
                     yield Button(
-                        pos_btn_label,
-                        variant="success",
-                        id="btn_pp_process",
+                        pos_btn_label, variant="success", id="btn_pp_process"
                     )
                     yield Button(
                         "Record Cash Transaction",
@@ -65,23 +112,98 @@ class PublicPurchaseModal(ModalScreen):
                     yield Button("Clear", id="btn_pp_clear")
 
                 yield Label("Recent Transactions:", classes="subtitle")
-                # Customer columns are intentionally omitted here — this table
-                # is visible on a shared login screen where other visitors may
-                # see it, so only non-identifying fields are displayed.
+                # Customer columns are intentionally omitted — this table is
+                # visible on a shared login screen where other visitors may see it.
                 yield DataTable(id="pp_txns_table")
-
                 yield Button("Refresh", id="btn_pp_refresh")
 
             with Horizontal(classes="filter-row"):
                 yield Button("Close", variant="error", id="btn_pp_close")
 
     def on_mount(self):
+        # Available items table
+        avail = self.query_one("#pp_inv_available_table", DataTable)
+        avail.add_column("ID", width=5)
+        avail.add_column("Name", width=28)
+        avail.add_column("Description", width=35)
+        avail.add_column("Price", width=10)
+        avail.cursor_type = "row"
+        self._load_inv_available()
+
+        # Cart table
+        cart = self.query_one("#pp_inv_cart_table", DataTable)
+        cart.add_column("Item", width=28)
+        cart.add_column("Qty", width=6)
+        cart.add_column("Unit Price", width=12)
+        cart.add_column("Subtotal", width=12)
+        cart.cursor_type = "row"
+
+        # Transaction history table
         table = self.query_one("#pp_txns_table", DataTable)
         table.add_columns("ID", "Date", "Amount", "Description", "Status", "Via")
         self._load_transactions()
 
+    def _load_inv_available(self):
+        """Populates the available items table from the active inventory."""
+        table = self.query_one("#pp_inv_available_table", DataTable)
+        table.clear()
+        for item in services.get_all_inventory_items():
+            table.add_row(
+                str(item.id), item.name, item.description or "", f"${item.price:.2f}"
+            )
+
+    def _rebuild_cart(self):
+        """
+        Rebuilds the cart DataTable from _cart state, then auto-fills the
+        amount and description fields with the computed total and item names.
+        """
+        table = self.query_one("#pp_inv_cart_table", DataTable)
+        table.clear()
+        total = 0.0
+        for entry in self._cart:
+            subtotal = entry["qty"] * entry["unit_price"]
+            total += subtotal
+            table.add_row(
+                entry["name"],
+                str(entry["qty"]),
+                f"${entry['unit_price']:.2f}",
+                f"${subtotal:.2f}",
+                key=str(entry["id"]),
+            )
+        self.query_one("#pp_inv_cart_total_lbl").update(f"Cart Total: ${total:.2f}")
+        try:
+            self.query_one("#pp_amount", Input).value = f"{total:.2f}" if total else ""
+            if self._cart:
+                desc_parts = [
+                    f"{e['name']} x{int(e['qty']) if e['qty'] == int(e['qty']) else e['qty']}"
+                    for e in self._cart
+                ]
+                self.query_one("#pp_description", Input).value = ", ".join(desc_parts)
+            else:
+                self.query_one("#pp_description", Input).value = ""
+        except Exception:
+            pass
+
+    def on_data_table_row_selected(self, event: DataTable.RowSelected):
+        if event.data_table.id == "pp_inv_available_table":
+            row_data = event.data_table.get_row(event.row_key)
+            self._inv_selected_item = {
+                "id": int(row_data[0]),
+                "name": str(row_data[1]),
+                "price": float(str(row_data[3]).lstrip("$")),
+            }
+        elif event.data_table.id == "pp_inv_cart_table":
+            self._inv_selected_cart_item_id = int(event.row_key.value)
+            self.query_one("#btn_pp_remove_from_cart").disabled = False
+
     def on_button_pressed(self, event: Button.Pressed):
-        if event.button.id == "btn_pp_process":
+        if event.button.id == "btn_pp_add_to_cart":
+            self._add_to_cart()
+        elif event.button.id == "btn_pp_remove_from_cart":
+            self._remove_from_cart()
+        elif event.button.id == "btn_pp_clear_cart":
+            self._clear_cart()
+        elif event.button.id == "btn_pp_process":
             self._process_transaction()
         elif event.button.id == "btn_pp_cash":
             self._record_cash()
@@ -92,13 +214,63 @@ class PublicPurchaseModal(ModalScreen):
         elif event.button.id == "btn_pp_close":
             self.dismiss()
 
+    def _add_to_cart(self):
+        if not self._inv_selected_item:
+            self.app.notify(
+                "Click an item in the table to select it first.", severity="warning"
+            )
+            return
+        try:
+            qty = float(self.query_one("#pp_inv_qty", Input).value or "1")
+            if qty <= 0:
+                self.app.notify("Quantity must be greater than zero.", severity="error")
+                return
+        except ValueError:
+            qty = 1.0
+
+        for entry in self._cart:
+            if entry["id"] == self._inv_selected_item["id"]:
+                entry["qty"] += qty
+                self._rebuild_cart()
+                return
+
+        self._cart.append({
+            "id": self._inv_selected_item["id"],
+            "name": self._inv_selected_item["name"],
+            "qty": qty,
+            "unit_price": self._inv_selected_item["price"],
+        })
+        self._rebuild_cart()
+
+    def _remove_from_cart(self):
+        if self._inv_selected_cart_item_id is None:
+            self.app.notify("Select a cart row first.", severity="warning")
+            return
+        self._cart = [
+            e for e in self._cart if e["id"] != self._inv_selected_cart_item_id
+        ]
+        self._inv_selected_cart_item_id = None
+        self.query_one("#btn_pp_remove_from_cart").disabled = True
+        self._rebuild_cart()
+
+    def _clear_cart(self):
+        self._cart = []
+        self._inv_selected_cart_item_id = None
+        try:
+            self.query_one("#btn_pp_remove_from_cart").disabled = True
+        except Exception:
+            pass
+        self._rebuild_cart()
+
     def _load_transactions(self):
-        """Populates the table with recent transactions, hiding customer details."""
+        """
+        Refreshes any pending Square Terminal checkouts from the API, then
+        populates the table with recent transactions, hiding customer details.
+        """
+        square_service.refresh_pending_transactions()
         table = self.query_one("#pp_txns_table", DataTable)
         table.clear()
-        transactions = square_service.get_recent_transactions(limit=20)
-        for txn in transactions:
-            # Determine the "Via" display based on payment method and status
+        for txn in square_service.get_recent_transactions(limit=20):
             if txn.square_status == "cash_square":
                 via = "Cash (Square)"
             elif txn.square_status == "cash":
@@ -112,14 +284,14 @@ class PublicPurchaseModal(ModalScreen):
                 txn.created_at.strftime("%Y-%m-%d %H:%M"),
                 f"${txn.amount:.2f}",
                 txn.description or "",
-                txn.square_status,
+                txn.square_status.replace("_", " ").title(),
                 via,
             )
 
     def _read_form(self):
         """
-        Reads and validates form inputs. Returns a dict of values on success
-        or None if validation fails (notification already shown to the user).
+        Reads and validates form inputs. Returns a dict on success or None if
+        validation fails (notification already shown to the user).
         """
         amount_str = self.query_one("#pp_amount", Input).value.strip()
         customer_name = self.query_one("#pp_customer_name", Input).value.strip()
@@ -154,7 +326,6 @@ class PublicPurchaseModal(ModalScreen):
         form = self._read_form()
         if form is None:
             return
-
         ok, message, txn = square_service.process_terminal_checkout(
             amount=form["amount"],
             customer_name=form["customer_name"],
@@ -172,7 +343,6 @@ class PublicPurchaseModal(ModalScreen):
         form = self._read_form()
         if form is None:
             return
-
         ok, message, txn = square_service.record_cash_payment(
             amount=form["amount"],
             customer_name=form["customer_name"],
@@ -186,7 +356,7 @@ class PublicPurchaseModal(ModalScreen):
             self._load_transactions()
 
     def _clear_form(self):
-        """Resets all form inputs to empty."""
+        """Resets all form inputs and clears the cart."""
         for field_id in (
             "pp_amount",
             "pp_customer_name",
@@ -195,3 +365,4 @@ class PublicPurchaseModal(ModalScreen):
             "pp_description",
         ):
             self.query_one(f"#{field_id}", Input).value = ""
+        self._clear_cart()

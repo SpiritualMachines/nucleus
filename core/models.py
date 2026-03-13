@@ -193,6 +193,88 @@ class PosConfig(SQLModel, table=True):
     square_access_token_production: str = Field(default="")
 
 
+class ProductTier(SQLModel, table=True):
+    """
+    Reusable template for membership or day pass products.
+    Admins define tiers (e.g. "Monthly - Standard", "Day Pass") so staff can
+    apply a standard package to an account without re-entering price and duration
+    each time. When consumables_credits is set, that amount is automatically
+    credited to the member's consumables balance when the tier is activated.
+    tier_type must be either "membership" or "daypass".
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str
+    tier_type: str  # "membership" or "daypass"
+    price: float = Field(default=0.0)
+    duration_days: Optional[int] = Field(default=None)  # membership only
+    consumables_credits: Optional[float] = Field(default=None)  # bonus credits on activation
+    description: Optional[str] = Field(default=None, sa_column=Column(Text))
+    is_active: bool = Field(default=True)
+
+
+class InventoryItem(SQLModel, table=True):
+    """
+    Reusable product or service available for selection when building a POS
+    transaction. Staff pick items from the inventory cart in the Purchases tab
+    instead of typing amounts and descriptions manually each time.
+    Deactivated items are hidden from the picker but preserved for audit history.
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    name: str = Field(default="")
+    description: Optional[str] = Field(default=None, sa_column=Column(Text))
+    price: float = Field(default=0.0)
+    is_active: bool = Field(default=True)
+
+
+class StorageUnit(SQLModel, table=True):
+    """
+    Represents a physical storage bin/locker/shelf at the space.
+    Units are created by staff and persist until explicitly deleted. Deactivating
+    a unit (is_active=False) hides it from the active list but preserves history.
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    unit_number: str = Field(default="")  # Human-readable label, e.g. "A-01"
+    description: str = Field(default="")  # e.g. "Storage Bin", "Locker 3"
+    is_active: bool = Field(default=True)
+
+    assignments: List["StorageAssignment"] = Relationship(back_populates="unit")
+
+
+class StorageAssignment(SQLModel, table=True):
+    """
+    Links a member (or named non-member) to a storage unit for a period of time.
+    Archiving an assignment sets archived_at; archived records remain in the
+    database and are shown in a separate history table below the active list.
+    charge_total is a computed value (charge_unit_count * charge_cost_per_unit)
+    stored redundantly for display efficiency and historical accuracy.
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    unit_id: int = Field(foreign_key="storageunit.id", index=True)
+    assigned_at: datetime = Field(default_factory=datetime.now)
+    archived_at: Optional[datetime] = Field(default=None)
+
+    # Either a registered member account or a freeform name — both are optional
+    user_account_number: Optional[int] = Field(default=None, index=True)
+    assigned_to_name: Optional[str] = Field(default=None)  # Freeform name override
+
+    item_description: Optional[str] = Field(default=None, sa_column=Column(Text))
+    notes: Optional[str] = Field(default=None, sa_column=Column(Text))
+
+    # Charges — all null when charges_owed is False
+    charges_owed: bool = Field(default=False)
+    charge_type: Optional[str] = Field(default=None)  # e.g. "Filament", "Large Format Printer"
+    charge_unit_count: Optional[float] = Field(default=None)
+    charge_cost_per_unit: Optional[float] = Field(default=None)
+    charge_total: Optional[float] = Field(default=None)  # Pre-computed total
+    charge_notes: Optional[str] = Field(default=None, sa_column=Column(Text))
+
+    unit: Optional["StorageUnit"] = Relationship(back_populates="assignments")
+
+
 class Feedback(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     user_account_number: int
@@ -263,6 +345,13 @@ class User(SQLModel, table=True):
     warnings: Optional[str] = Field(default=None, sa_column=Column(Text))
     banned: bool = False
     account_comments: Optional[str] = Field(default=None, sa_column=Column(Text))
+
+    # Square Subscription — populated when a recurring membership is activated.
+    # Nucleus never stores payment details; Square owns the billing flow entirely.
+    square_customer_id: Optional[str] = Field(default=None)
+    square_subscription_id: Optional[str] = Field(default=None)
+    square_subscription_status: Optional[str] = Field(default=None)
+    square_subscription_checked_at: Optional[datetime] = Field(default=None)
 
     # --- Relationships ---
     dues: List[MembershipDues] = Relationship(back_populates="user")

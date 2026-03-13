@@ -1,11 +1,11 @@
 """
 Email delivery module for Nucleus using the Resend API.
 
-This module is responsible for building and sending outbound email reports.
-It relies on services.py for all data access and never imports from screens/
-or any Textual UI code. Configuration (API key, addresses) is read from the
-AppSetting table at send time so that admin changes take effect without
-restarting the application.
+This module is responsible for building and sending outbound email reports and
+transaction receipts. It relies on services.py for all data access and never
+imports from screens/ or any Textual UI code. Configuration (API key, addresses)
+is read from the AppSetting table at send time so that admin changes take effect
+without restarting the application.
 """
 
 import resend
@@ -35,6 +35,141 @@ _TD_ALT_LABEL_STYLE = (
     "padding: 5px 10px; border: 1px solid #ccc; "
     "background: #f4f4f4; text-align: left; font-weight: bold;"
 )
+
+
+def send_transaction_receipt(
+    txn_id: int,
+    amount: float,
+    customer_name: str,
+    customer_email: str,
+    description: str,
+    payment_method: str,
+    transaction_ref: str,
+    transaction_date: str,
+    subject_override: str = "",
+) -> bool:
+    """
+    Emails a transaction receipt to the customer via Resend.
+
+    Returns True on successful delivery. Returns False when receipts are
+    disabled in settings, the Resend API key is not configured, or no
+    recipient email is available. Raises on unexpected API errors so the
+    caller can surface them as notifications.
+
+    Parameters:
+        txn_id           -- Local Nucleus transaction ID, shown as Receipt number.
+        amount           -- Transaction amount in dollars.
+        customer_name    -- Display name on the receipt.
+        customer_email   -- Recipient address; function returns False if empty.
+        description      -- Item or service description; shown as N/A if empty.
+        payment_method   -- Human-readable method, e.g. "Cash" or "Card (Square Terminal)".
+        transaction_ref  -- Square checkout or payment ID; shown as N/A if empty.
+        transaction_date -- Pre-formatted date string, e.g. "2026-03-12 14:30".
+        subject_override -- Optional subject line override; defaults to "Receipt #{txn_id}".
+    """
+    if get_setting("email_receipts_enabled", "false").lower() != "true":
+        return False
+
+    if not customer_email:
+        print("[Email] Receipt not sent: no customer email address")
+        return False
+
+    api_key = get_sensitive_setting_value("resend_api_key")
+    if not api_key:
+        print("[Email] Receipt not sent: Resend API key not configured")
+        return False
+
+    hackspace_name = get_setting("hackspace_name", "Nucleus")
+    from_email = get_setting("report_from_email", "onboarding@resend.dev")
+
+    subject = (
+        subject_override
+        if subject_override
+        else f"{hackspace_name} - Receipt #{txn_id}"
+    )
+
+    resend.api_key = api_key
+    html_body = _build_receipt_html(
+        hackspace_name=hackspace_name,
+        txn_id=txn_id,
+        amount=amount,
+        customer_name=customer_name,
+        description=description or "N/A",
+        payment_method=payment_method,
+        transaction_ref=transaction_ref or "N/A",
+        transaction_date=transaction_date,
+    )
+
+    params = {
+        "from": from_email,
+        "to": [customer_email],
+        "subject": subject,
+        "html": html_body,
+    }
+
+    resend.Emails.send(params)
+    print(f"[Email] Receipt #{txn_id} sent to {customer_email}")
+    return True
+
+
+def _build_receipt_html(
+    hackspace_name: str,
+    txn_id: int,
+    amount: float,
+    customer_name: str,
+    description: str,
+    payment_method: str,
+    transaction_ref: str,
+    transaction_date: str,
+) -> str:
+    """Renders a clean two-column receipt table as an HTML email body."""
+    divider = "<div style='border-top: 1px solid #ddd; margin: 20px 0;'></div>"
+
+    rows_data = [
+        ("Receipt Number", f"#{txn_id}"),
+        ("Date", transaction_date),
+        ("Amount", f"${amount:.2f}"),
+        ("Payment Method", payment_method),
+        ("Description", description),
+        ("Transaction Reference", transaction_ref),
+    ]
+
+    rows_html = ""
+    for i, (label, value) in enumerate(rows_data):
+        label_style = _TD_ALT_LABEL_STYLE if i % 2 else _TD_LABEL_STYLE
+        val_style = _TD_ALT_STYLE if i % 2 else _TD_STYLE
+        rows_html += (
+            f"<tr>"
+            f"<td style='{label_style}'>{label}</td>"
+            f"<td style='{val_style}'>{value}</td>"
+            f"</tr>"
+        )
+
+    table = (
+        f"<table style='{_TABLE_STYLE}'>"
+        f"<tbody>{rows_html}</tbody>"
+        f"</table>"
+    )
+
+    return f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family: sans-serif; color: #333; max-width: 640px; margin: auto; padding: 20px;">
+  <h2 style="margin-bottom: 0;">{hackspace_name} - Receipt</h2>
+  <p style="margin-top: 4px; color: #666;">
+    Thank you for your payment, {customer_name}.
+  </p>
+  {divider}
+  {table}
+  {divider}
+  <p style="color: #555;">
+    This is your receipt from {hackspace_name}. Please retain it for your records.
+  </p>
+  <p style="font-size: 0.8em; color: #999;">
+    Sent automatically by Nucleus. To disable transaction receipts, contact your administrator.
+  </p>
+</body>
+</html>"""
 
 
 def send_daily_report() -> bool:
@@ -104,6 +239,7 @@ def _build_html(data: dict) -> str:
         ("New Members", "new_members"),
         ("Memberships Expiring", "memberships_expiring"),
         ("Sign-ins", "sign_ins"),
+        ("Volunteers", "volunteers"),
         ("Day Passes", "day_passes"),
         ("Consumables Transactions", "transactions"),
         ("Community Contacts", "community_contacts"),
@@ -147,8 +283,8 @@ def _build_html(data: dict) -> str:
                 "Brought In By",
                 "Visited At",
                 "Community Tour",
-                "Staff",
-                "Notes",
+                "Staff Name and Description",
+                "Other (please specify)",
             ]
         )
         contact_thead = f"<thead><tr>{contact_header_cells}</tr></thead>"
@@ -180,10 +316,43 @@ def _build_html(data: dict) -> str:
             "<p style='color: #888;'>No community contacts recorded in this period.</p>"
         )
 
+    # --- Table 3: Recent transactions detail ---
+    txns = data["recent_transactions_detail"]
+    if txns:
+        txn_header_cells = "".join(
+            f"<th style='{_TH_STYLE}'>{h}</th>"
+            for h in ["Date", "Customer", "Amount", "Description", "Status", "Via"]
+        )
+        txn_thead = f"<thead><tr>{txn_header_cells}</tr></thead>"
+
+        txn_rows = []
+        for i, t in enumerate(txns):
+            td = _TD_ALT_STYLE if i % 2 else _TD_STYLE
+            cells = "".join(
+                f"<td style='{td}'>{v}</td>"
+                for v in [
+                    t["date"],
+                    t["customer_name"],
+                    t["amount"],
+                    t["description"],
+                    t["status"],
+                    t["via"],
+                ]
+            )
+            txn_rows.append(f"<tr>{cells}</tr>")
+
+        txn_tbody = f"<tbody>{''.join(txn_rows)}</tbody>"
+        transactions_table = (
+            f"<table style='{_TABLE_STYLE}'>{txn_thead}{txn_tbody}</table>"
+        )
+    else:
+        transactions_table = (
+            "<p style='color: #888;'>No transactions recorded in this period.</p>"
+        )
+
     # A unique token per send prevents Gmail's threading heuristic from treating
-    # the community contacts section as "already seen" content from a previous
-    # daily report and collapsing it as quoted text. The token is invisible to
-    # the reader but is different on every email so Gmail cannot match it.
+    # repeated sections as "already seen" content from a previous daily report
+    # and collapsing them as quoted text.
     from datetime import datetime as _dt
 
     unique_token = _dt.now().strftime("%Y%m%d%H%M%S%f")
@@ -213,6 +382,11 @@ def _build_html(data: dict) -> str:
       </h3>
       {contacts_table}
     </div>
+    {divider}
+    <h3 style="border-bottom: 2px solid #333; padding-bottom: 4px;">
+      Transactions (last 7 days)
+    </h3>
+    {transactions_table}
     {divider}
     <p style="font-size: 0.8em; color: #999;">
       Sent automatically by Nucleus. To disable, turn off daily reports in Settings.

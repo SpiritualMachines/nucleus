@@ -95,40 +95,49 @@ class HackspaceApp(App):
         """
         Daemon thread that fires the daily email report at the admin-configured time
         (report_send_time setting, HH:MM 24-hour format, default 07:00).
-        On each wake, it calculates the next future occurrence of the configured time
-        so that restarting the app after the scheduled time never causes an immediate
-        spurious send — the email waits until the next day.
+
+        Polls every 60 seconds rather than sleeping for hours. This makes the
+        scheduler resilient to system sleep and hibernate — a single long sleep
+        would expire the moment the system resumed, causing the email to fire at
+        whatever time the machine woke up rather than the configured time.
+
+        A sent_date tracker ensures exactly one report per calendar day regardless
+        of how many times the clock crosses the configured minute boundary.
         """
+        sent_date = None
+
         while True:
+            time.sleep(60)
             now = datetime.now()
+            today = now.date()
+
+            # Re-read the setting on every poll so changes take effect immediately
             send_time_str = services.get_setting("report_send_time", "07:00")
             try:
                 parts = send_time_str.strip().split(":")
                 send_hour = int(parts[0])
                 send_minute = int(parts[1]) if len(parts) > 1 else 0
             except Exception:
-                # Fall back to 07:00 if the stored value is malformed
                 send_hour, send_minute = 7, 0
                 print(
                     f"[Email Scheduler] Invalid report_send_time '{send_time_str}', using 07:00"
                 )
 
-            next_send = now.replace(
+            target = now.replace(
                 hour=send_hour, minute=send_minute, second=0, microsecond=0
             )
-            # If the configured time has already passed today, schedule for tomorrow
-            if next_send <= now:
-                next_send += timedelta(days=1)
 
-            sleep_seconds = (next_send - now).total_seconds()
-            print(
-                f"[Email Scheduler] Next report scheduled for {next_send} (in {sleep_seconds / 3600:.1f} hours)"
-            )
-            time.sleep(sleep_seconds)
-            print(
-                f"[Email Scheduler] Triggering daily email report at {datetime.now()}"
-            )
-            self.send_daily_email_report()
+            # Fire if we have reached or passed the target time today and have
+            # not already sent for today. This window stays open for the rest of
+            # the day so a report is not skipped if the machine was asleep at
+            # exactly the configured minute.
+            if now >= target and sent_date != today:
+                print(
+                    f"[Email Scheduler] Triggering daily email report at {now} "
+                    f"(configured time {send_hour:02d}:{send_minute:02d})"
+                )
+                self.send_daily_email_report()
+                sent_date = today
 
     def run_daily_maintenance(self):
         """
