@@ -43,7 +43,6 @@ class PublicPurchaseModal(ModalScreen):
         with Vertical(classes="splash-container"):
             yield Label("Manual Purchase", classes="title")
             with VerticalScroll(classes="splash-content"):
-
                 # Step 1: Inventory Cart
                 with Vertical(classes="form-subsection"):
                     yield Label("Step 1: Select Items (Optional)", classes="subtitle")
@@ -101,9 +100,7 @@ class PublicPurchaseModal(ModalScreen):
                     yield Input(placeholder="Phone number", id="pp_customer_phone")
 
                 with Horizontal(classes="filter-row"):
-                    yield Button(
-                        pos_btn_label, variant="success", id="btn_pp_process"
-                    )
+                    yield Button(pos_btn_label, variant="success", id="btn_pp_process")
                     yield Button(
                         "Record Cash Transaction",
                         variant="warning",
@@ -234,12 +231,14 @@ class PublicPurchaseModal(ModalScreen):
                 self._rebuild_cart()
                 return
 
-        self._cart.append({
-            "id": self._inv_selected_item["id"],
-            "name": self._inv_selected_item["name"],
-            "qty": qty,
-            "unit_price": self._inv_selected_item["price"],
-        })
+        self._cart.append(
+            {
+                "id": self._inv_selected_item["id"],
+                "name": self._inv_selected_item["name"],
+                "qty": qty,
+                "unit_price": self._inv_selected_item["price"],
+            }
+        )
         self._rebuild_cart()
 
     def _remove_from_cart(self):

@@ -1,0 +1,126 @@
+.management-section {
+    height: auto;
+    margin-bottom: 2; /* Explicit margin */
+    border-bottom: solid $secondary;
+    padding-bottom: 1;
+}
+
+.pending-section {
+    height: 1fr; /* Takes remaining space */
+    min-height: 20;
+}
+
+/* FIX: Make table fill the space so buttons aren't stranded */
+#pending_table {
+    height: 1fr;
+    border: tall $primary;
+}
+
+/* FIX: Remove dock bottom so buttons flow naturally after the table */
+.pending-buttons {
+    height: auto;
+    margin-top: 1;
+}
+
+#logout_timer {
+    width: 100%;
+    text-align: right;
+    background: $boost;
+    color: $text-muted;
+    padding: 0 2;
+    dock: bottom;
+}
+
+#logout_timer.urgent {
+    color: $error;
+    text-style: bold;
+}
+
+/* --- Database Tab Specifics --- */
+.query-presets {
+    height: auto;
+    max-height: 15;
+    border: solid $secondary;
+    background: $boost;
+    padding: 1;
+    margin-bottom: 1;
+    overflow-y: auto;
+}
+
+#sql_results {
+    height: 1fr; /* Table takes remaining space and scrolls internally */
+    min-height: 10;
+    border: tall $primary;
+}
+
+.export-section {
+    height: auto;
+    margin-top: 1;
+    padding-top: 1;
+    border-top: solid $secondary;
+}
+
+/* --- Storage Tab --- */
+#storage_active_table {
+    height: 15;
+    border: solid $secondary;
+    margin-bottom: 1;
+}
+
+#storage_archived_table {
+    height: 10;
+    border: solid $secondary;
+    margin-bottom: 1;
+}
+
+/* --- Inventory Cart (Purchases Tab) --- */
+#inv_available_table {
+    height: 8;
+    border: solid $secondary;
+    margin-bottom: 1;
+}
+
+#inv_cart_table {
+    height: 6;
+    border: solid $secondary;
+    margin-bottom: 1;
+}
+
+/* Constrain the quantity input so the Add to Cart button stays visible */
+#inv_qty, #pp_inv_qty {
+    width: 12;
+}
+
+/* --- Purchases Tab --- */
+.purchase-section {
+    height: auto;
+    margin-bottom: 2;
+    border: solid $secondary;
+    padding: 1;
+    background: $boost;
+}
+
+.search-row {
+    height: auto;
+    margin-bottom: 1;
+}
+
+#user_search_table, #my_mem_table, #my_daypass_table, #my_cons_table {
+    height: 10; /* Fixed small height for search results */
+    border: solid $secondary;
+    margin-bottom: 1;
+}
+
+/* --- POS Customer Search --- */
+#pos_customer_search_table {
+    height: 8;
+    border: solid $secondary;
+    margin-bottom: 1;
+}
+
+/* --- Staff Tools Search --- */
+#staff_user_search_table {
+    height: 10;
+    border: solid $secondary;
+    margin-bottom: 1;
+}

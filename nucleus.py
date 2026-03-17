@@ -31,9 +31,11 @@ class HackspaceApp(App):
         self.theme = "nord"
 
         # 2. Start background scheduler threads.
-        #    Maintenance (backup + expiry) runs immediately and then daily at midnight.
+        #    Maintenance (membership expiry) runs immediately and then daily at midnight.
+        #    Backup runs on its own thread at the admin-configured time (never on startup).
         #    Email reports run on their own thread, firing at the admin-configured time.
         threading.Thread(target=self.run_maintenance_scheduler, daemon=True).start()
+        threading.Thread(target=self.run_backup_scheduler, daemon=True).start()
         threading.Thread(target=self.run_email_scheduler, daemon=True).start()
 
         # 3. Initialize DB, apply pending schema migrations, seed settings, then load UI
@@ -74,11 +76,12 @@ class HackspaceApp(App):
 
     def run_maintenance_scheduler(self):
         """
-        Long-running daemon thread that executes all daily maintenance tasks.
+        Long-running daemon thread for membership expiry checks.
         Runs immediately on launch, then sleeps until 00:01 each night and repeats.
-        Adding a new daily task only requires calling it inside run_daily_maintenance().
+        Backup is handled separately by run_backup_scheduler so it can be
+        scheduled at an admin-configured time rather than always running at startup.
         """
-        # Run immediately at launch so maintenance is never skipped on a fresh start
+        # Run immediately at launch so expiry checks are never skipped on a fresh start
         self.run_daily_maintenance()
 
         while True:
@@ -139,13 +142,58 @@ class HackspaceApp(App):
                 self.send_daily_email_report()
                 sent_date = today
 
+    def run_backup_scheduler(self):
+        """
+        Daemon thread that fires the database backup at the admin-configured time
+        (backup_time setting, HH:MM 24-hour format, default 02:00).
+
+        Uses the same 60-second poll pattern as the email scheduler so the scheduler
+        remains resilient to system sleep. The backup only runs when backup_enabled
+        is set to "true". A backed_up_date tracker ensures exactly one backup per
+        calendar day regardless of how many times the clock crosses the target minute.
+        """
+        backed_up_date = None
+
+        while True:
+            time.sleep(60)
+
+            # Re-read settings on every poll so changes take effect without restart
+            enabled = services.get_setting("backup_enabled", "false").lower() == "true"
+            if not enabled:
+                continue
+
+            now = datetime.now()
+            today = now.date()
+
+            backup_time_str = services.get_setting("backup_time", "02:00")
+            try:
+                parts = backup_time_str.strip().split(":")
+                backup_hour = int(parts[0])
+                backup_minute = int(parts[1]) if len(parts) > 1 else 0
+            except Exception:
+                backup_hour, backup_minute = 2, 0
+                print(
+                    f"[Backup Scheduler] Invalid backup_time '{backup_time_str}', using 02:00"
+                )
+
+            target = now.replace(
+                hour=backup_hour, minute=backup_minute, second=0, microsecond=0
+            )
+
+            if now >= target and backed_up_date != today:
+                print(
+                    f"[Backup Scheduler] Triggering backup at {now} "
+                    f"(configured time {backup_hour:02d}:{backup_minute:02d})"
+                )
+                self.perform_daily_backup()
+                backed_up_date = today
+
     def run_daily_maintenance(self):
         """
-        Runs backup and membership-expiry tasks in sequence. Called at launch and once
-        per day just after midnight. Each task is independent — a failure in one does
-        not prevent the others from running. Email is handled by run_email_scheduler.
+        Runs membership-expiry tasks. Called at launch and once per day just after
+        midnight. Backup is intentionally excluded here — it runs at an admin-configured
+        time via run_backup_scheduler.
         """
-        self.perform_daily_backup()
         self.check_expired_memberships()
 
     def check_expired_memberships(self):
@@ -224,11 +272,17 @@ class HackspaceApp(App):
     def perform_daily_backup(self):
         """
         Creates a copy of hackspace.db in /backups/ named db_backup_MMDDYY.db.
-        Skips silently if a backup for today already exists. After creating the backup,
-        purges files beyond the backup_retention_days setting (0 = keep all).
-        get_setting calls fall back gracefully if the appsetting table is not yet
-        available on first launch before DB initialisation completes.
+        Only runs when backup_enabled is "true". Skips silently if a backup for today
+        already exists. After creating the backup, purges files beyond the
+        backup_retention_days setting (0 = keep all). If backup_email is configured
+        the backup file is also emailed as an attachment via Resend.
         """
+        # Honour the enabled toggle — the scheduler checks this too, but defend here
+        # in case perform_daily_backup is ever called directly.
+        enabled = services.get_setting("backup_enabled", "false").lower() == "true"
+        if not enabled:
+            return
+
         db_file = "hackspace.db"
         backup_dir = "backups"
 
@@ -254,9 +308,11 @@ class HackspaceApp(App):
         backup_path = os.path.join(backup_dir, backup_filename)
 
         # Copy only if today's backup does not already exist
+        backup_created = False
         if not os.path.exists(backup_path):
             try:
                 shutil.copy2(db_file, backup_path)
+                backup_created = True
                 self.call_from_thread(
                     self.notify, f"Daily Backup Created: {backup_filename}"
                 )
@@ -287,6 +343,24 @@ class HackspaceApp(App):
                         os.remove(os.path.join(backup_dir, old_file))
             except Exception:
                 pass  # Purge errors are non-fatal; the backup itself was already created
+
+        # Email the backup file if an address has been configured
+        if backup_created:
+            backup_email = services.get_setting("backup_email", "").strip()
+            if backup_email:
+                try:
+                    from core.email_service import send_backup_email
+
+                    send_backup_email(backup_path, backup_filename, backup_email)
+                    self.call_from_thread(
+                        self.notify, f"Backup emailed to {backup_email}"
+                    )
+                except Exception as e:
+                    self.call_from_thread(
+                        self.notify,
+                        f"Backup email failed: {str(e)}",
+                        severity="error",
+                    )
 
 
 if __name__ == "__main__":

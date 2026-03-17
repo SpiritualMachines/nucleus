@@ -771,7 +771,11 @@ def get_or_create_member_square_customer(
 
         # Reuse the stored ID rather than creating a duplicate customer record.
         if user.square_customer_id:
-            return True, "Existing Square customer record found.", user.square_customer_id
+            return (
+                True,
+                "Existing Square customer record found.",
+                user.square_customer_id,
+            )
 
         client = _get_square_client()
         if not client:
@@ -786,7 +790,11 @@ def get_or_create_member_square_customer(
             client, customer_name, user.email, user.phone or None
         )
         if not customer_id:
-            return False, "Could not create Square customer record. Check the API token.", None
+            return (
+                False,
+                "Could not create Square customer record. Check the API token.",
+                None,
+            )
 
         user.square_customer_id = customer_id
         session.add(user)
@@ -811,7 +819,10 @@ def activate_square_subscription(
     from core.models import User
 
     if not plan_variation_id:
-        return False, "No Plan Variation ID is configured. Set it in Settings > Subscriptions."
+        return (
+            False,
+            "No Plan Variation ID is configured. Set it in Settings > Subscriptions.",
+        )
 
     ok, msg, customer_id = get_or_create_member_square_customer(acct_num)
     if not ok:
@@ -902,7 +913,11 @@ def poll_member_subscription(acct_num: int) -> Tuple[bool, str]:
         session.commit()
 
         is_active = new_status in _SUBSCRIPTION_ACTIVE_STATUSES
-        action = "Access is active." if is_active else f"Access may need review (status: {new_status})."
+        action = (
+            "Access is active."
+            if is_active
+            else f"Access may need review (status: {new_status})."
+        )
         return True, f"Subscription status: {new_status}. {action}"
 
 

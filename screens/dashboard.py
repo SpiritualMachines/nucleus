@@ -8,18 +8,14 @@ from textual.screen import Screen
 from textual.widgets import (
     Button,
     Checkbox,
-    ContentSwitcher,
     DataTable,
     Footer,
     Header,
     Input,
     Label,
-    ListItem,
-    ListView,
     Select,
     TabbedContent,
     TabPane,
-    TextArea,
 )
 
 from core import exporters, models, services, square_service
@@ -40,6 +36,8 @@ from screens.dashboard_modals import (
     PostActionCountdownModal,
     SelectVisitTypeModal,
     StorageAssignModal,
+    StorageEditModal,
+    StorageViewModal,
     TransactionModal,
     ViewCreditsModal,
     VISIT_TYPES,
@@ -47,168 +45,140 @@ from screens.dashboard_modals import (
 from screens.directory_select import DirectorySelectScreen
 from screens.edit_profile import ChangePasswordScreen, EditProfileScreen
 from screens.registration import RegisterScreen
+from screens.settings_screen import SettingsScreen
 
 
 class Dashboard(Screen):
-    # CSS to fix layout issues in Staff Tools and ensure visibility
-    CSS = """
-    .management-section {
-        height: auto;
-        margin-bottom: 2; /* Explicit margin */
-        border-bottom: solid $secondary;
-        padding-bottom: 1;
+    CSS_PATH = "../theme/dashboard.tcss"
+
+    # SQL preset queries for the Database tab quick-load buttons
+    _SQL_PRESETS = {
+        "sql_q1": (
+            "SELECT first_name, last_name, allergies, health_concerns"
+            " FROM user WHERE allergies != '' OR health_concerns != ''"
+        ),
+        "sql_q2": (
+            "SELECT first_name, last_name, emergency_first_name,"
+            " emergency_phone FROM user"
+        ),
+        "sql_q3": (
+            "SELECT u.first_name, u.last_name, u.email FROM user u"
+            " JOIN safetytraining s ON u.account_number ="
+            " s.user_account_number WHERE s.orientation = 0"
+        ),
+        "sql_q4": "SELECT role, COUNT(*) as count FROM user GROUP BY role",
+        "sql_q5": (
+            "SELECT u.first_name, u.last_name, s.sign_in_time,"
+            " s.sign_out_time FROM spaceattendance s JOIN user u ON"
+            " s.user_account_number = u.account_number WHERE"
+            " s.sign_in_time BETWEEN '2025-01-01 00:00:00'"
+            " AND '2025-12-31 23:59:59'"
+        ),
     }
 
-    .pending-section {
-        height: 1fr; /* Takes remaining space */
-        min-height: 20;
-    }
-
-    /* FIX: Make table fill the space so buttons aren't stranded */
-    #pending_table {
-        height: 1fr;
-        border: tall $primary;
-    }
-
-    /* FIX: Remove dock bottom so buttons flow naturally after the table */
-    .pending-buttons {
-        height: auto;
-        margin-top: 1;
-    }
-
-    #logout_timer {
-        width: 100%;
-        text-align: right;
-        background: $boost;
-        color: $text-muted;
-        padding: 0 2;
-        dock: bottom;
-    }
-
-    #logout_timer.urgent {
-        color: $error;
-        text-style: bold;
-    }
-
-    /* --- Database Tab Specifics --- */
-    .query-presets {
-        height: auto;
-        max-height: 15;
-        border: solid $secondary;
-        background: $boost;
-        padding: 1;
-        margin-bottom: 1;
-        overflow-y: auto;
-    }
-
-    #sql_results {
-        height: 1fr; /* Table takes remaining space and scrolls internally */
-        min-height: 10;
-        border: tall $primary;
-    }
-
-    .export-section {
-        height: auto;
-        margin-top: 1;
-        padding-top: 1;
-        border-top: solid $secondary;
-    }
-
-    /* --- Storage Tab --- */
-    #storage_active_table {
-        height: 15;
-        border: solid $secondary;
-        margin-bottom: 1;
-    }
-
-    #storage_archived_table {
-        height: 10;
-        border: solid $secondary;
-        margin-bottom: 1;
-    }
-
-    #tbl_storage_units {
-        height: 10;
-        border: solid $secondary;
-        margin-bottom: 1;
-    }
-
-    /* --- Inventory Cart (Purchases Tab) --- */
-    #inv_available_table {
-        height: 8;
-        border: solid $secondary;
-        margin-bottom: 1;
-    }
-
-    #inv_cart_table {
-        height: 6;
-        border: solid $secondary;
-        margin-bottom: 1;
-    }
-
-    /* Constrain the quantity input so the Add to Cart button stays visible */
-    #inv_qty, #pp_inv_qty {
-        width: 12;
-    }
-
-    /* --- Inventory Settings --- */
-    #tbl_inventory_items {
-        height: 12;
-        border: solid $secondary;
-        margin-bottom: 1;
-    }
-
-    /* --- Purchases Tab --- */
-    .purchase-section {
-        height: auto;
-        margin-bottom: 2;
-        border: solid $secondary;
-        padding: 1;
-        background: $boost;
-    }
-
-    .search-row {
-        height: auto;
-        margin-bottom: 1;
-    }
-
-    #user_search_table, #my_mem_table, #my_daypass_table, #my_cons_table {
-        height: 10; /* Fixed small height for search results */
-        border: solid $secondary;
-        margin-bottom: 1;
-    }
-
-    /* --- Staff Tools Search --- */
-    #staff_user_search_table {
-        height: 10;
-        border: solid $secondary;
-        margin-bottom: 1;
-    }
-
-    /* --- Settings Tab --- */
-    #setting_ascii_logo {
-        height: 13;
-        border: solid $secondary;
-        margin-bottom: 1;
-    }
-
-    /* --- Settings Sidebar Layout --- */
-    #settings_layout {
-        height: 1fr;
-    }
-
-    #settings_nav {
-        width: 26;
-        height: 100%;
-        border-right: solid $secondary;
-        background: $boost;
-    }
-
-    #settings_content {
-        width: 1fr;
-        height: 100%;
-    }
-    """
+    # Table configuration for initialisation in on_mount. Each entry maps a
+    # table widget ID to its column definitions and cursor type.  Columns
+    # represented as (name, width) tuples use add_column with explicit widths;
+    # plain string tuples use add_columns for simple cases.
+    _TABLE_CONFIGS = [
+        {
+            "id": "feedback_table",
+            "columns": [
+                ("ID", 4),
+                ("Date", 18),
+                ("Name", 20),
+                ("Urgent", 8),
+                ("Comment Preview", 45),
+                ("Response", 45),
+            ],
+            "cursor_type": "row",
+        },
+        {
+            "id": "pending_table",
+            "columns": ("Acct #", "Name", "Email", "Date Joined"),
+            "cursor_type": "row",
+        },
+        {
+            "id": "members_table",
+            "columns": ("Acct #", "Name", "Role", "Email"),
+            "cursor_type": "row",
+        },
+        {
+            "id": "user_search_table",
+            "columns": ("Acct #", "Name", "Email"),
+            "cursor_type": "row",
+        },
+        {
+            "id": "staff_user_search_table",
+            "columns": ("Acct #", "Name", "Email"),
+            "cursor_type": "row",
+        },
+        {
+            "id": "pos_customer_search_table",
+            "columns": ("Acct #", "Name", "Email", "Phone"),
+            "cursor_type": "row",
+        },
+        {
+            "id": "pos_txns_table",
+            "columns": [
+                ("ID", 5),
+                ("Date", 18),
+                ("Customer", 22),
+                ("Amount", 10),
+                ("Description", 28),
+                ("Status", 12),
+                ("Via", 8),
+            ],
+            "cursor_type": "row",
+        },
+        {
+            "id": "inv_available_table",
+            "columns": [
+                ("ID", 5),
+                ("Name", 28),
+                ("Description", 35),
+                ("Price", 10),
+            ],
+            "cursor_type": "row",
+        },
+        {
+            "id": "inv_cart_table",
+            "columns": [
+                ("Item", 28),
+                ("Qty", 6),
+                ("Unit Price", 12),
+                ("Subtotal", 12),
+            ],
+            "cursor_type": "row",
+        },
+        {
+            "id": "storage_active_table",
+            "columns": [
+                ("ID", 5),
+                ("Unit", 10),
+                ("Assigned To", 22),
+                ("Item", 28),
+                ("Notes", 22),
+                ("Charge Type", 20),
+                ("Total", 10),
+                ("Assigned At", 18),
+            ],
+            "cursor_type": "row",
+        },
+        {
+            "id": "storage_archived_table",
+            "columns": [
+                ("ID", 5),
+                ("Unit", 10),
+                ("Assigned To", 22),
+                ("Item", 28),
+                ("Charge Type", 20),
+                ("Total", 10),
+                ("Archived At", 18),
+            ],
+            "cursor_type": "row",
+        },
+    ]
 
     AUTO_LOGOUT_SECONDS = 600  # 10 Minutes
 
@@ -216,19 +186,11 @@ class Dashboard(Screen):
     selected_user_acct = None
     # Track selected POS transaction row for status checks
     selected_pos_txn_id = None
-    # Track active device pairing code ID for polling
-    _pos_pairing_code_id = None
-    # Track selected tier rows for the Product Categories settings tab
-    selected_mem_tier_id = None
-    selected_dp_tier_id = None
-    # Track selected storage unit row in settings and active assignment row in storage tab
-    selected_storage_unit_id = None
+    # Track selected active assignment row in the Storage tab
     selected_storage_assignment_id = None
-    # Track selected inventory item row in settings panel
-    selected_inventory_item_id = None
-    # Inventory cart state — reset per session in on_mount to avoid class-level sharing
+    # Inventory cart state -- reset per session in on_mount to avoid class-level sharing
     _cart: list = []
-    _inv_selected_item: dict = None   # {id, name, price} from available table
+    _inv_selected_item: dict = None  # {id, name, price} from available table
     _inv_selected_cart_key: str = None  # row key of selected cart row
     _manual_entry_counter: int = 0  # increments to give each manual entry a unique key
 
@@ -258,1128 +220,763 @@ class Dashboard(Screen):
         yield Label("", id="pending_alert", classes="hidden")
 
         with TabbedContent():
-            # Tab 1: My Profile
             with TabPane("My Profile"):
-                # Safe role access (handles both Enum and String cases)
-                role_val = (
-                    user.role.value if hasattr(user.role, "value") else str(user.role)
-                )
-                role_name = (
-                    user.role.name if hasattr(user.role, "name") else str(user.role)
-                )
+                yield from self._compose_profile_tab(user, currency)
 
-                yield Label(
-                    f"Welcome, {role_val.title()} {user.first_name}!",
-                    classes="title",
-                    id="welcome_lbl",
-                )
-                yield Label(f"Account Type: {role_name}", id="lbl_role")
-                yield Label(f"Account #: {user.account_number}", id="lbl_acct")
-                yield Label("Credit Balance: $0.00", id="lbl_balance")
-
-                with Horizontal(classes="filter-row"):
-                    yield Button("Edit My Information", id="edit_profile_btn")
-                    yield Button("Change Password", id="change_pwd_btn")
-                with Horizontal(classes="filter-row"):
-                    # Label updated on mount by update_signin_button
-                    yield Button("Sign In to Makerspace", id="signin_btn")
-                    yield Button("Logout", id="logout_btn")
-
-                yield Label("My Preferences", classes="subtitle")
-
-                yield Label("Preferred Visit Type (leave blank to always be asked):")
-                yield Select(
-                    [("No preference (always ask)", "")]
-                    + [(vt, vt) for vt in VISIT_TYPES],
-                    id="pref_visit_type",
-                    value="",
-                )
-
-                yield Button("Save Preferences", id="btn_save_prefs")
-
-            # Tab 2: Staff Actions (Available to Staff and Admin)
             if user.role in [models.UserRole.STAFF, models.UserRole.ADMIN]:
                 with TabPane("Staff Tools"):
-                    with Vertical(classes="management-section"):
-                        yield Label("User Management", classes="title")
-                        yield Button(
-                            "Register New Member (In-Person)", id="btn_staff_reg"
-                        )
+                    yield from self._compose_staff_tools_tab(user)
 
-                    # --- NEW SECTION: Quick User Search ---
-                    with Vertical(classes="management-section"):
-                        yield Label("Quick User Search / Manage", classes="subtitle")
-                        yield Label("Search for a user to open their management menu:")
-
-                        with Horizontal(classes="search-row"):
-                            yield Input(
-                                placeholder="Name or Email...",
-                                id="staff_user_search_input",
-                            )
-                            yield Button("Search", id="btn_staff_user_search")
-
-                        yield DataTable(id="staff_user_search_table")
-                    # --------------------------------------
-
-                    with Vertical(classes="pending-section"):
-                        yield Label("Pending Approvals", classes="title")
-                        yield DataTable(id="pending_table")
-                        yield Label("Select a row, then click Approve.", classes="subtitle")
-
-                        # Stacked buttons
-                        with Vertical(classes="pending-buttons"):
-                            yield Button(
-                                "Approve Selected Account",
-                                variant="success",
-                                id="approve_btn",
-                            )
-                            yield Button("Refresh List", id="refresh_pending")
-
-            # --- PURCHASES TAB (Visible to Everyone, but different content) ---
             with TabPane("Purchases"):
-                with VerticalScroll():
-                    yield Label("Purchases", classes="title")
+                yield from self._compose_purchases_tab(user, currency)
 
-                    # === STAFF / ADMIN VIEW ===
-                    if user.role in [models.UserRole.STAFF, models.UserRole.ADMIN]:
-                        # Subsection 0: Manual Transaction (Point of Sale)
-                        with Vertical(classes="purchase-section"):
-                            pos_cfg = square_service.get_pos_config()
-                            pos_btn_label = (
-                                "Send to Square Terminal"
-                                if pos_cfg.square_enabled
-                                else "Record Transaction"
-                            )
-                            yield Label("Manual Transaction", classes="subtitle")
-
-                            # Step 1: Inventory Cart
-                            with Vertical(classes="form-subsection"):
-                                yield Label(
-                                    "Step 1: Select Items (Optional)",
-                                    classes="subtitle",
-                                )
-                                yield Label(
-                                    "Click an item row to select it, set the quantity,"
-                                    " then click Add to Cart."
-                                    " Amount and Description are auto-filled."
-                                )
-                                yield DataTable(id="inv_available_table")
-                                with Horizontal(classes="filter-row"):
-                                    yield Label("Quantity:")
-                                    yield Input("1", id="inv_qty", type="number")
-                                    yield Button(
-                                        "Add to Cart",
-                                        variant="primary",
-                                        id="btn_add_to_cart",
-                                    )
-                                yield Label("Cart:", classes="subtitle")
-                                yield DataTable(id="inv_cart_table")
-                                with Horizontal(classes="filter-row"):
-                                    yield Label(
-                                        "Cart Total: $0.00", id="inv_cart_total_lbl"
-                                    )
-                                    yield Button(
-                                        "Remove Selected",
-                                        variant="error",
-                                        id="btn_remove_from_cart",
-                                        disabled=True,
-                                    )
-                                    yield Button("Clear Cart", id="btn_clear_cart")
-
-                            # Step 2: Add a custom line item not in the inventory list
-                            with Vertical(classes="form-subsection"):
-                                yield Label(
-                                    "Step 2: Add Custom Item (Optional)",
-                                    classes="subtitle",
-                                )
-                                yield Label(
-                                    "Add charges not covered by the inventory above,"
-                                    " e.g. a workshop fee or donation."
-                                )
-                                yield Label("Item Name / Description:")
-                                yield Input(
-                                    placeholder="e.g. Workshop fee, Donation",
-                                    id="pos_manual_desc",
-                                )
-                                yield Label("Price ($):")
-                                yield Input(
-                                    placeholder="0.00",
-                                    id="pos_manual_price",
-                                    type="number",
-                                )
-                                with Horizontal(classes="filter-row"):
-                                    yield Button(
-                                        "Add Custom Item",
-                                        variant="primary",
-                                        id="btn_add_manual_to_cart",
-                                    )
-
-                            # Step 3: Customer Details
-                            with Vertical(classes="form-subsection"):
-                                yield Label(
-                                    "Step 3: Customer Details", classes="subtitle"
-                                )
-                                yield Label("Customer Name:")
-                                yield Input(
-                                    placeholder="First and Last Name",
-                                    id="pos_customer_name",
-                                )
-                                yield Label(
-                                    "Customer Email (required to send a receipt for cash transactions):"
-                                )
-                                yield Input(
-                                    placeholder="customer@example.com",
-                                    id="pos_customer_email",
-                                )
-                                yield Label("Customer Phone (optional):")
-                                yield Input(
-                                    placeholder="Phone number",
-                                    id="pos_customer_phone",
-                                )
-
-                            with Horizontal(classes="filter-row"):
-                                yield Button(
-                                    pos_btn_label,
-                                    variant="success",
-                                    id="btn_process_manual_txn",
-                                )
-                                yield Button(
-                                    "Record Cash Transaction",
-                                    variant="warning",
-                                    id="btn_record_cash_txn",
-                                )
-                                yield Button(
-                                    "Clear Form",
-                                    id="btn_clear_pos_form",
-                                )
-
-                            yield Label("Recent Transactions:", classes="subtitle")
-                            yield DataTable(id="pos_txns_table")
-
-                            with Horizontal(classes="filter-row"):
-                                yield Button(
-                                    "Refresh",
-                                    id="btn_refresh_pos_txns",
-                                )
-                                yield Button(
-                                    "Check Terminal Status",
-                                    variant="primary",
-                                    id="btn_check_pos_status",
-                                    disabled=True,
-                                )
-
-                        # Subsection 1: Existing User Transactions (consolidated)
-                        with Vertical(classes="purchase-section"):
-                            yield Label(
-                                "Existing User Transactions", classes="subtitle"
-                            )
-                            yield Label(
-                                "Search for a user to manage their memberships, day passes, and credits:"
-                            )
-                            with Horizontal(classes="search-row"):
-                                yield Input(
-                                    placeholder="Name or Email...",
-                                    id="user_search_input",
-                                )
-                                yield Button("Search", id="btn_user_search")
-                            yield DataTable(id="user_search_table")
-                            yield Label(
-                                "Actions for Selected User:", classes="subtitle"
-                            )
-                            yield Label(
-                                "Search for a user above to enable actions.",
-                                classes="text-muted",
-                                id="lbl_no_user_hint",
-                            )
-                            # Row 1: Membership actions
-                            with Horizontal(classes="filter-row"):
-                                yield Button(
-                                    "Add Membership",
-                                    variant="success",
-                                    id="btn_add_mem",
-                                    disabled=True,
-                                )
-                                yield Button(
-                                    "Edit Memberships",
-                                    variant="primary",
-                                    id="btn_edit_mem",
-                                    disabled=True,
-                                )
-                            # Row 2: Day Pass actions
-                            with Horizontal(classes="filter-row"):
-                                yield Button(
-                                    "Add Day Pass",
-                                    variant="success",
-                                    id="btn_add_daypass",
-                                    disabled=True,
-                                )
-                                yield Button(
-                                    "View Day Passes",
-                                    variant="primary",
-                                    id="btn_view_daypass",
-                                    disabled=True,
-                                )
-                            # Row 3: Credits actions
-                            with Horizontal(classes="filter-row"):
-                                yield Button(
-                                    f"Add {currency} (+)",
-                                    variant="success",
-                                    id="btn_credit",
-                                    disabled=True,
-                                )
-                                yield Button(
-                                    f"Deduct {currency} (-)",
-                                    variant="error",
-                                    id="btn_debit",
-                                    disabled=True,
-                                )
-                                yield Button(
-                                    f"View {currency}",
-                                    variant="primary",
-                                    id="btn_view_credits",
-                                    disabled=True,
-                                )
-                            # Row 4: Square subscription actions
-                            with Horizontal(classes="filter-row"):
-                                yield Button(
-                                    "Activate Square Membership Subscription",
-                                    variant="success",
-                                    id="btn_activate_subscription",
-                                    disabled=True,
-                                )
-                                yield Button(
-                                    "Cancel Subscription",
-                                    variant="error",
-                                    id="btn_cancel_subscription",
-                                    disabled=True,
-                                )
-                                yield Button(
-                                    "Poll Subscription Status",
-                                    variant="primary",
-                                    id="btn_poll_subscription",
-                                    disabled=True,
-                                )
-
-                    # === REGULAR USER VIEW ===
-                    else:
-                        # Subsection 1: My Memberships
-                        with Vertical(classes="purchase-section"):
-                            yield Label("My Memberships", classes="subtitle")
-                            yield DataTable(id="my_mem_table")
-
-                        # Subsection 2: My Day Passes
-                        with Vertical(classes="purchase-section"):
-                            yield Label("My Day Passes", classes="subtitle")
-                            yield DataTable(id="my_daypass_table")
-
-                        # Subsection 3: My Consumables
-                        with Vertical(classes="purchase-section"):
-                            yield Label(f"My {currency} Ledger", classes="subtitle")
-                            yield Label(
-                                f"{currency} Balance: $0.00", id="my_balance_lbl"
-                            )
-                            yield DataTable(id="my_cons_table")
-
-            # Tab 4: Reports (Staff/Admin)
             if user.role in [models.UserRole.STAFF, models.UserRole.ADMIN]:
-                with TabPane("Reports"):  # Renamed from "Membership Reports"
-                    yield Label("Membership Reports", classes="title")
-                    yield Label("(Click any row to Manage User)", classes="subtitle")
+                with TabPane("Reports"):
+                    yield from self._compose_reports_tab()
 
-                    yield Label("Filter by role:", classes="subtitle")
-                    with Horizontal(classes="filter-row"):
-                        yield Checkbox("Admin", value=True, id="chk_admin")
-                        yield Checkbox("Staff", value=True, id="chk_staff")
-                        yield Checkbox("Member (Active)", value=True, id="chk_member")
-                        yield Checkbox(
-                            "Community (Inactive)", value=False, id="chk_community"
-                        )
-                        yield Checkbox("Signed In", value=False, id="chk_signed_in")
-
-                    yield Button("Refresh Report", id="load_members")
-                    yield DataTable(id="members_table")
-
-                    yield Label("Export Options:", classes="subtitle")
-                    yield Button("Export CSV", id="btn_export_members_csv")
-                    yield Button("Export PDF", id="btn_export_members_pdf")
-
-                    yield Label("Admin and Statistics Reports:", classes="subtitle")
-                    yield Button(
-                        "Export Period Traction Report",
-                        id="btn_period_traction_report",
-                    )
-                    yield Button(
-                        "Export Community Contacts Report",
-                        id="btn_community_contacts_report",
-                    )
-                    yield Button(
-                        "Export Everything People CSV Report",
-                        id="btn_everything_people_csv",
-                    )
-
-            # Tab 5: Storage (Staff/Admin)
             if user.role in [models.UserRole.STAFF, models.UserRole.ADMIN]:
                 with TabPane("Storage"):
-                    with VerticalScroll():
-                        yield Label("Member Storage", classes="title")
+                    yield from self._compose_storage_tab()
 
-                        # Active storage assignments
-                        yield Label("Active Storage Assignments", classes="subtitle")
-                        yield DataTable(id="storage_active_table")
-                        with Horizontal(classes="filter-row"):
-                            yield Button("Assign Storage", variant="success", id="btn_storage_assign")
-                            yield Button(
-                                "Remove Selected (Archive)",
-                                variant="error",
-                                id="btn_storage_archive",
-                                disabled=True,
-                            )
-                            yield Button("Refresh", id="btn_storage_refresh")
-
-                        # Archived storage assignments
-                        yield Label("Archived Storage Assignments", classes="subtitle")
-                        yield DataTable(id="storage_archived_table")
-
-            # Tab 6: Database (Available to ADMIN ONLY)
             if user.role == models.UserRole.ADMIN:
                 with TabPane("Database"):
-                    sql_console_enabled = (
-                        services.get_setting("sql_console_enabled", "true").lower()
-                        == "true"
-                    )
+                    yield from self._compose_database_tab()
 
-                    if not sql_console_enabled:
-                        yield Label(
-                            "SQL Console is disabled by the administrator.",
-                            classes="subtitle",
-                        )
-                    else:
-                        # --- LOCKED STATE VIEW ---
-                        with Center(id="db_lock_wrapper"):
-                            with Vertical(
-                                id="db_locked_view", classes="login-container"
-                            ):
-                                yield Label("SECURITY WARNING", classes="title error")
-                                yield Label(
-                                    "You are accessing Raw SQL Controls.",
-                                    classes="subtitle",
-                                )
-                                yield Label(
-                                    "Bad commands can permanently DELETE or CORRUPT data.",
-                                    classes="error",
-                                )
-                                yield Label(
-                                    "Proceed with extreme caution.", classes="subtitle"
-                                )
-
-                                yield Input(
-                                    placeholder="Confirm Admin Password",
-                                    password=True,
-                                    id="db_pass_input",
-                                )
-
-                                yield Button(
-                                    "Unlock", variant="error", id="btn_verify_unlock"
-                                )
-
-                        # --- UNLOCKED STATE VIEW (Hidden Initially) ---
-                        with Vertical(id="db_unlocked_view", classes="hidden"):
-                            yield Label(
-                                "Raw SQL Execution (Danger Zone)", classes="title"
-                            )
-
-                            with Vertical(classes="query-presets"):
-                                yield Label("Common Queries (Click to Load):")
-                                yield Button(
-                                    "1. Users with Medical/Allergy Info",
-                                    id="sql_q1",
-                                    classes="sql-btn",
-                                )
-                                yield Button(
-                                    "2. Emergency Contact List",
-                                    id="sql_q2",
-                                    classes="sql-btn",
-                                )
-                                yield Button(
-                                    "3. Members Missing Safety Orientation",
-                                    id="sql_q3",
-                                    classes="sql-btn",
-                                )
-                                yield Button(
-                                    "4. Count Users by Role",
-                                    id="sql_q4",
-                                    classes="sql-btn",
-                                )
-                                yield Button(
-                                    "5. Attendance Report (Date Range)",
-                                    id="sql_q5",
-                                    classes="sql-btn",
-                                )
-
-                            yield Input(
-                                placeholder="Enter custom SQL query here...",
-                                id="sql_input",
-                            )
-                            yield Button(
-                                "Execute SQL", variant="error", id="exec_sql_btn"
-                            )
-
-                            yield Label("", id="sql_status")
-
-                            yield DataTable(id="sql_results")
-
-                            with Vertical(classes="export-section"):
-                                yield Label("Export Options:", classes="subtitle")
-                                yield Button(
-                                    "Export Results CSV", id="btn_export_sql_csv"
-                                )
-                                yield Button(
-                                    "Export Results PDF", id="btn_export_sql_pdf"
-                                )
-
-            # Tab 7: Settings (Admin only)
             if user.role == models.UserRole.ADMIN:
-                with TabPane("Settings"):
-                    with Horizontal(id="settings_layout"):
-                        with ListView(id="settings_nav"):
-                            yield ListItem(Label("General"),                  id="nav_settings_general")
-                            yield ListItem(Label("Operations"),               id="nav_settings_operations")
-                            yield ListItem(Label("Branding"),                 id="nav_settings_branding")
-                            yield ListItem(Label("Security"),                 id="nav_settings_security")
-                            yield ListItem(Label("Point of Sale"),            id="nav_settings_pos")
-                            yield ListItem(Label("Subscriptions"),            id="nav_settings_subscriptions")
-                            yield ListItem(Label("Product Categories"),       id="nav_settings_products")
-                            yield ListItem(Label("Storage Units"),            id="nav_settings_storage")
-                            yield ListItem(Label("Inventory"),                id="nav_settings_inventory")
-                            yield ListItem(Label("Email and Notifications"),  id="nav_settings_email")
+                with TabPane("Settings", id="tab_settings"):
+                    yield SettingsScreen()
 
-                        with ContentSwitcher(initial="settings_panel_general", id="settings_content"):
-                            # --- General ---
-                            with VerticalScroll(id="settings_panel_general"):
-                                yield Label("General Settings", classes="title")
-
-                                yield Label("Auto-Logout Timeout (minutes):")
-                                yield Input(
-                                    services.get_setting(
-                                        "logout_timeout_minutes", "10"
-                                    ),
-                                    placeholder="e.g. 10",
-                                    id="setting_logout_minutes",
-                                    type="integer",
-                                )
-
-                                yield Button(
-                                    "Save General Settings",
-                                    variant="success",
-                                    id="btn_save_general",
-                                )
-
-                            # --- Operations ---
-                            with VerticalScroll(id="settings_panel_operations"):
-                                yield Label("Space Operations", classes="title")
-
-                                yield Label(
-                                    "Membership Grace Period (days after expiry before role downgrade, 0 = immediate):"
-                                )
-                                yield Input(
-                                    services.get_setting(
-                                        "membership_grace_period_days", "0"
-                                    ),
-                                    placeholder="e.g. 0",
-                                    id="setting_grace_period",
-                                    type="integer",
-                                )
-
-                                yield Label("Day Pass Cost (currency units, 0 = free):")
-                                yield Input(
-                                    services.get_setting("day_pass_cost_credits", "0"),
-                                    placeholder="e.g. 0",
-                                    id="setting_daypass_cost",
-                                    type="integer",
-                                )
-
-                                yield Label("Max Concurrent Sign-Ins (0 = unlimited):")
-                                yield Input(
-                                    services.get_setting("max_concurrent_signins", "0"),
-                                    placeholder="e.g. 0",
-                                    id="setting_max_signins",
-                                    type="integer",
-                                )
-
-                                yield Label(
-                                    "Backup Retention (days to keep, 0 = keep all):"
-                                )
-                                yield Input(
-                                    services.get_setting("backup_retention_days", "30"),
-                                    placeholder="e.g. 30",
-                                    id="setting_backup_retention",
-                                    type="integer",
-                                )
-
-                                yield Button(
-                                    "Save Operations Settings",
-                                    variant="success",
-                                    id="btn_save_operations",
-                                )
-
-                            # --- Branding ---
-                            with VerticalScroll(id="settings_panel_branding"):
-                                yield Label("Branding and Reporting", classes="title")
-
-                                yield Label("Hackspace Name:")
-                                yield Input(
-                                    services.get_setting(
-                                        "hackspace_name", settings.HACKSPACE_NAME
-                                    ),
-                                    placeholder="e.g. City Hackerspace",
-                                    id="setting_hackspace_name",
-                                )
-
-                                yield Label(
-                                    "Tag Name (short label used on buttons, e.g. Makerspace):"
-                                )
-                                yield Input(
-                                    services.get_setting("tag_name", settings.TAG_NAME),
-                                    placeholder="e.g. Makerspace",
-                                    id="setting_tag_name",
-                                )
-
-                                yield Label("App Name:")
-                                yield Input(
-                                    services.get_setting("app_name", settings.APP_NAME),
-                                    placeholder="e.g. Nucleus",
-                                    id="setting_app_name",
-                                )
-
-                                yield Label("ASCII Logo:")
-                                yield TextArea(id="setting_ascii_logo")
-
-                                yield Label(
-                                    "Currency Name (what your space calls its internal currency, e.g. Credits, Hackerbucks):"
-                                )
-                                yield Input(
-                                    services.get_setting(
-                                        "app_currency_name", "Credits"
-                                    ),
-                                    placeholder="e.g. Credits",
-                                    id="setting_currency_name",
-                                )
-
-                                yield Label("Default Export Format:")
-                                yield Select(
-                                    [("CSV", "csv"), ("PDF", "pdf")],
-                                    id="setting_default_export",
-                                    value=services.get_setting(
-                                        "default_export_format", "csv"
-                                    ),
-                                )
-
-                                yield Label(
-                                    "PDF Report Header Text (shown below title on all PDF exports):"
-                                )
-                                yield Input(
-                                    services.get_setting("report_header_text", ""),
-                                    placeholder="e.g. City Hackerspace - Membership Reports",
-                                    id="setting_report_header",
-                                )
-
-                                yield Label("Staff Reply-To Email Address (optional):")
-                                yield Input(
-                                    services.get_setting("staff_email", ""),
-                                    placeholder="e.g. staff@yourhackerspace.org",
-                                    id="setting_staff_email",
-                                )
-
-                                yield Button(
-                                    "Save Branding Settings",
-                                    variant="success",
-                                    id="btn_save_branding",
-                                )
-
-                            # --- Security ---
-                            with VerticalScroll(id="settings_panel_security"):
-                                yield Label("Security Settings", classes="title")
-
-                                yield Label("Minimum Password Length:")
-                                yield Input(
-                                    services.get_setting("min_password_length", "8"),
-                                    placeholder="e.g. 8",
-                                    id="setting_min_pwd_len",
-                                    type="integer",
-                                )
-
-                                yield Label(
-                                    "Max Login Attempts Before Lockout (0 = unlimited, lockout lasts 30 minutes):"
-                                )
-                                yield Input(
-                                    services.get_setting("login_attempt_limit", "0"),
-                                    placeholder="e.g. 0",
-                                    id="setting_login_limit",
-                                    type="integer",
-                                )
-
-                                yield Checkbox(
-                                    "SQL Console Enabled (changes take effect on next login)",
-                                    id="setting_sql_console",
-                                    value=services.get_setting(
-                                        "sql_console_enabled", "true"
-                                    ).lower()
-                                    == "true",
-                                )
-
-                                yield Button(
-                                    "Save Security Settings",
-                                    variant="success",
-                                    id="btn_save_security",
-                                )
-
-                            # --- Point of Sale ---
-                            with VerticalScroll(id="settings_panel_pos"):
-                                yield Label("Point of Sale Settings", classes="title")
-                                yield Label(
-                                    "Configure Square Terminal integration for processing card payments."
-                                )
-
-                                pos_cfg = square_service.get_pos_config()
-
-                                yield Checkbox(
-                                    "Enable Square Terminal",
-                                    id="setting_square_enabled",
-                                    value=pos_cfg.square_enabled,
-                                )
-
-                                yield Label("Square Environment:")
-                                yield Select(
-                                    [
-                                        ("Sandbox (Testing)", "sandbox"),
-                                        ("Production (Live)", "production"),
-                                    ],
-                                    id="setting_square_env",
-                                    value=pos_cfg.square_environment,
-                                )
-
-                                yield Label("Sandbox Access Token:")
-                                yield Input(
-                                    placeholder=(
-                                        "Sandbox token configured - paste to replace"
-                                        if square_service.pos_sandbox_token_is_configured()
-                                        else "Paste Square sandbox token here..."
-                                    ),
-                                    id="setting_square_token_sandbox",
-                                )
-                                yield Button(
-                                    "Save Sandbox Token",
-                                    id="btn_save_square_token_sandbox",
-                                    variant="success",
-                                )
-
-                                yield Label("Production Access Token:")
-                                yield Input(
-                                    placeholder=(
-                                        "Production token configured - paste to replace"
-                                        if square_service.pos_production_token_is_configured()
-                                        else "Paste Square production token here..."
-                                    ),
-                                    id="setting_square_token_production",
-                                )
-                                yield Button(
-                                    "Save Production Token",
-                                    id="btn_save_square_token_production",
-                                    variant="success",
-                                )
-
-                                yield Label("Square Location ID:")
-                                yield Input(
-                                    pos_cfg.square_location_id,
-                                    placeholder="Your Square location ID",
-                                    id="setting_square_location_id",
-                                )
-
-                                yield Label("Square Device ID:")
-                                yield Input(
-                                    pos_cfg.square_device_id,
-                                    placeholder="Terminal device ID from Square Dashboard",
-                                    id="setting_square_device_id",
-                                )
-
-                                yield Label("Currency:")
-                                yield Select(
-                                    [
-                                        ("CAD - Canadian Dollar", "CAD"),
-                                        ("USD - US Dollar", "USD"),
-                                        ("AUD - Australian Dollar", "AUD"),
-                                        ("GBP - British Pound", "GBP"),
-                                        ("EUR - Euro", "EUR"),
-                                        ("JPY - Japanese Yen", "JPY"),
-                                        ("CHF - Swiss Franc", "CHF"),
-                                        ("NZD - New Zealand Dollar", "NZD"),
-                                        ("SGD - Singapore Dollar", "SGD"),
-                                        ("HKD - Hong Kong Dollar", "HKD"),
-                                        ("SEK - Swedish Krona", "SEK"),
-                                        ("NOK - Norwegian Krone", "NOK"),
-                                        ("DKK - Danish Krone", "DKK"),
-                                        ("CNY - Chinese Yuan", "CNY"),
-                                        ("MXN - Mexican Peso", "MXN"),
-                                        ("BRL - Brazilian Real", "BRL"),
-                                        ("INR - Indian Rupee", "INR"),
-                                        ("ZAR - South African Rand", "ZAR"),
-                                        ("AED - UAE Dirham", "AED"),
-                                        ("SAR - Saudi Riyal", "SAR"),
-                                        ("QAR - Qatari Riyal", "QAR"),
-                                        ("KWD - Kuwaiti Dinar", "KWD"),
-                                        ("BHD - Bahraini Dinar", "BHD"),
-                                        ("OMR - Omani Rial", "OMR"),
-                                        ("JOD - Jordanian Dinar", "JOD"),
-                                        ("ILS - Israeli New Shekel", "ILS"),
-                                        ("TRY - Turkish Lira", "TRY"),
-                                        ("PLN - Polish Zloty", "PLN"),
-                                        ("CZK - Czech Koruna", "CZK"),
-                                        ("HUF - Hungarian Forint", "HUF"),
-                                        ("RON - Romanian Leu", "RON"),
-                                        ("THB - Thai Baht", "THB"),
-                                        ("MYR - Malaysian Ringgit", "MYR"),
-                                        ("PHP - Philippine Peso", "PHP"),
-                                        ("IDR - Indonesian Rupiah", "IDR"),
-                                        ("KRW - South Korean Won", "KRW"),
-                                        ("TWD - Taiwan Dollar", "TWD"),
-                                        ("VND - Vietnamese Dong", "VND"),
-                                        ("PKR - Pakistani Rupee", "PKR"),
-                                        ("BDT - Bangladeshi Taka", "BDT"),
-                                        ("LKR - Sri Lankan Rupee", "LKR"),
-                                        ("NGN - Nigerian Naira", "NGN"),
-                                        ("KES - Kenyan Shilling", "KES"),
-                                        ("GHS - Ghanaian Cedi", "GHS"),
-                                        ("EGP - Egyptian Pound", "EGP"),
-                                        ("MAD - Moroccan Dirham", "MAD"),
-                                        ("CLP - Chilean Peso", "CLP"),
-                                        ("COP - Colombian Peso", "COP"),
-                                        ("PEN - Peruvian Sol", "PEN"),
-                                        ("ARS - Argentine Peso", "ARS"),
-                                    ],
-                                    id="setting_square_currency",
-                                    value=pos_cfg.square_currency or "CAD",
-                                )
-
-                                yield Button(
-                                    "Save POS Settings",
-                                    variant="success",
-                                    id="btn_save_pos_settings",
-                                )
-
-                                yield Label("Terminal Pairing", classes="subtitle")
-                                yield Label(
-                                    "If your terminal is not receiving checkouts,"
-                                    " it needs to be paired for Terminal API use."
-                                )
-                                yield Label(
-                                    "Click 'Pair Terminal', then on the terminal:"
-                                    " tap the three-dot menu, go to Settings > Device,"
-                                )
-                                yield Label(
-                                    "tap 'Pair for Terminal API', and enter the code"
-                                    " shown below. Then click 'Check Pairing Status'."
-                                )
-                                with Horizontal(classes="filter-row"):
-                                    yield Button(
-                                        "Pair Terminal",
-                                        variant="primary",
-                                        id="btn_pair_terminal",
-                                    )
-                                    yield Button(
-                                        "Check Pairing Status",
-                                        id="btn_check_pairing",
-                                        disabled=True,
-                                    )
-                                yield Label("", id="lbl_pairing_code")
-
-                            # --- Subscriptions ---
-                            with VerticalScroll(id="settings_panel_subscriptions"):
-                                yield Label("Square Recurring Subscriptions", classes="title")
-                                yield Label(
-                                    "Configure the Square subscription plan used when enrolling members."
-                                    " Create your plan and variation in the Square Dashboard first,"
-                                    " then paste the Variation ID here."
-                                )
-
-                                yield Label("")
-                                yield Label("Plan Variation ID:")
-                                yield Input(
-                                    services.get_setting(
-                                        "square_subscription_plan_variation_id", ""
-                                    ),
-                                    placeholder="e.g. D3KPJGMOWQQFJJGZIHHDBFDA",
-                                    id="setting_subscription_plan_id",
-                                )
-
-                                yield Label("Billing Timezone:")
-                                yield Input(
-                                    services.get_setting(
-                                        "square_subscription_timezone", "America/Toronto"
-                                    ),
-                                    placeholder="e.g. America/Toronto",
-                                    id="setting_subscription_timezone",
-                                )
-
-                                with Horizontal(classes="filter-row"):
-                                    yield Button(
-                                        "Save Subscription Settings",
-                                        variant="success",
-                                        id="btn_save_subscription_settings",
-                                    )
-
-                                yield Label("", classes="subtitle")
-                                yield Label("Manual Poll", classes="subtitle")
-                                yield Label(
-                                    "Check the current subscription status for all enrolled members."
-                                    " This runs automatically via scripts/poll_subscriptions.py."
-                                )
-                                with Horizontal(classes="filter-row"):
-                                    yield Button(
-                                        "Poll All Subscriptions Now",
-                                        variant="primary",
-                                        id="btn_poll_all_subscriptions",
-                                    )
-                                yield Label("", id="lbl_poll_result")
-
-                            # --- Product Categories ---
-                            with VerticalScroll(id="settings_panel_products"):
-                                yield Label("Product Categories", classes="title")
-                                yield Label(
-                                    "Define reusable tier templates for memberships and day passes."
-                                    " Selecting a tier in the Add Membership or Add Day Pass"
-                                    " dialogs will auto-fill price and duration."
-                                )
-
-                                # Membership Tiers section
-                                yield Label("Membership Tiers", classes="subtitle")
-                                yield DataTable(id="tbl_mem_tiers")
-                                with Horizontal(classes="filter-row"):
-                                    yield Button(
-                                        "Delete Selected",
-                                        id="btn_delete_mem_tier",
-                                        variant="error",
-                                    )
-                                yield Label("Name:")
-                                yield Input(placeholder="e.g. Monthly Standard", id="tier_mem_name")
-                                yield Label("Price ($):")
-                                yield Input(placeholder="0.00", type="number", id="tier_mem_price")
-                                yield Label("Duration (days):")
-                                yield Input(placeholder="30", type="integer", id="tier_mem_duration")
-                                yield Label("Consumables Credits (optional):")
-                                yield Input(placeholder="0.00", type="number", id="tier_mem_credits")
-                                yield Label("Description (optional):")
-                                yield Input(placeholder="", id="tier_mem_description")
-                                with Horizontal(classes="filter-row"):
-                                    yield Button(
-                                        "Add Membership Tier",
-                                        id="btn_add_mem_tier",
-                                        variant="success",
-                                    )
-
-                                # Day Pass Tiers section
-                                yield Label("Day Pass Tiers", classes="subtitle")
-                                yield DataTable(id="tbl_dp_tiers")
-                                with Horizontal(classes="filter-row"):
-                                    yield Button(
-                                        "Delete Selected",
-                                        id="btn_delete_dp_tier",
-                                        variant="error",
-                                    )
-                                yield Label("Name:")
-                                yield Input(placeholder="e.g. Standard Day Pass", id="tier_dp_name")
-                                yield Label("Price ($):")
-                                yield Input(placeholder="0.00", type="number", id="tier_dp_price")
-                                yield Label("Description (optional):")
-                                yield Input(placeholder="", id="tier_dp_description")
-                                with Horizontal(classes="filter-row"):
-                                    yield Button(
-                                        "Add Day Pass Tier",
-                                        id="btn_add_dp_tier",
-                                        variant="success",
-                                    )
-
-                            # --- Storage Units ---
-                            with VerticalScroll(id="settings_panel_storage"):
-                                yield Label("Storage Units", classes="title")
-                                yield Label(
-                                    "Create and delete storage units (bins, lockers, shelves)."
-                                    " Units with active assignments cannot be deleted."
-                                )
-
-                                yield DataTable(id="tbl_storage_units")
-
-                                with Horizontal(classes="filter-row"):
-                                    yield Button(
-                                        "Delete Selected",
-                                        id="btn_delete_storage_unit",
-                                        variant="error",
-                                        disabled=True,
-                                    )
-
-                                yield Label("Create Storage Unit", classes="subtitle")
-                                yield Label("Unit Number (auto-filled, editable):")
-                                yield Input(
-                                    services.get_next_storage_unit_number(),
-                                    placeholder="e.g. A-01",
-                                    id="storage_unit_number",
-                                )
-                                yield Label("Description (auto-filled, editable):")
-                                yield Input(
-                                    "Storage Bin",
-                                    placeholder="e.g. Storage Bin",
-                                    id="storage_unit_description",
-                                )
-                                with Horizontal(classes="filter-row"):
-                                    yield Button(
-                                        "Create Storage Unit",
-                                        id="btn_create_storage_unit",
-                                        variant="success",
-                                    )
-
-                            # --- Inventory ---
-                            with VerticalScroll(id="settings_panel_inventory"):
-                                yield Label("Inventory Items", classes="title")
-                                yield Label(
-                                    "Define items that staff can select when processing"
-                                    " transactions. Items appear in the inventory cart"
-                                    " in the Purchases tab."
-                                )
-
-                                yield DataTable(id="tbl_inventory_items")
-                                with Horizontal(classes="filter-row"):
-                                    yield Button(
-                                        "Delete Selected",
-                                        id="btn_delete_inventory_item",
-                                        variant="error",
-                                        disabled=True,
-                                    )
-
-                                yield Label("Add Inventory Item", classes="subtitle")
-                                yield Label("Name:")
-                                yield Input(placeholder="e.g. 3D Print Filament or Chips", id="inv_item_name")
-                                yield Label("Description (optional):")
-                                yield Input(placeholder="", id="inv_item_description")
-                                yield Label("Price ($):")
-                                yield Input(
-                                    placeholder="0.00",
-                                    id="inv_item_price",
-                                    type="number",
-                                )
-                                with Horizontal(classes="filter-row"):
-                                    yield Button(
-                                        "Add Item",
-                                        id="btn_add_inventory_item",
-                                        variant="success",
-                                    )
-
-                            # --- Email and Notifications ---
-                            with VerticalScroll(id="settings_panel_email"):
-                                yield Label("Email and Notifications", classes="title")
-
-                                # The API key input is always visible. The placeholder
-                                # changes to indicate whether a key is already stored.
-                                # Pasting a new value and clicking Save Key overwrites
-                                # whatever was there before — the raw value is never
-                                # pre-filled or displayed.
-                                yield Label("Resend API Key:")
-                                yield Input(
-                                    placeholder=(
-                                        "Key configured - paste new key to replace"
-                                        if services.sensitive_setting_is_configured(
-                                            "resend_api_key"
-                                        )
-                                        else "Paste Resend API key here..."
-                                    ),
-                                    id="setting_resend_api_key_input",
-                                )
-                                yield Button(
-                                    "Save Key",
-                                    id="btn_save_api_key",
-                                    variant="success",
-                                )
-
-                                yield Label("From Email Address:")
-                                yield Input(
-                                    services.get_setting(
-                                        "report_from_email", "onboarding@resend.dev"
-                                    ),
-                                    id="setting_from_email",
-                                )
-
-                                yield Label("Send Daily Report To (email):")
-                                yield Input(
-                                    services.get_setting("report_to_email", ""),
-                                    placeholder="e.g. admin@yourhackerspace.org",
-                                    id="setting_to_email",
-                                )
-
-                                yield Label(
-                                    "Daily Report Send Time (24-hour HH:MM, e.g. 07:00):"
-                                )
-                                yield Input(
-                                    services.get_setting("report_send_time", "07:00"),
-                                    id="setting_report_send_time",
-                                )
-
-                                yield Checkbox(
-                                    "Enable Daily Email Reports",
-                                    id="setting_email_reports_enabled",
-                                    value=services.get_setting(
-                                        "email_reports_enabled", "false"
-                                    ).lower()
-                                    == "true",
-                                )
-
-                                yield Checkbox(
-                                    "Email receipts to customers after each transaction",
-                                    id="setting_email_receipts_enabled",
-                                    value=services.get_setting(
-                                        "email_receipts_enabled", "false"
-                                    ).lower()
-                                    == "true",
-                                )
-
-                                with Horizontal():
-                                    yield Button(
-                                        "Save Email Settings",
-                                        variant="success",
-                                        id="btn_save_email",
-                                    )
-                                    yield Button(
-                                        "Send Test Email",
-                                        variant="primary",
-                                        id="btn_test_email",
-                                    )
-
-            # Tab 7: Feedback
             with TabPane("Feedback"):
-                yield Label("Submit Feedback / Bug Reports", classes="title")
+                yield from self._compose_feedback_tab(user)
 
-                with Horizontal(classes="agreement-row"):
-                    yield Checkbox("General Feedback", id="chk_fb_general")
-                    yield Checkbox("Feature Request", id="chk_fb_feature")
-                    yield Checkbox("Bug Report", id="chk_fb_bug")
-                    yield Label("   ")
-                    yield Checkbox("URGENT", id="chk_fb_urgent")
-
-                yield Input(placeholder="Type your comment here...", id="fb_comment")
-                yield Button(
-                    "Submit Feedback", variant="primary", id="btn_submit_feedback"
-                )
-
-                # --- VISIBILITY RESTRICTION: Only Staff/Admin see the table and exports ---
-                if user.role in [models.UserRole.STAFF, models.UserRole.ADMIN]:
-                    yield Label("Recent Submissions", classes="subtitle")
-                    yield DataTable(id="feedback_table")
-                    yield Button("Refresh List", id="btn_refresh_feedback")
-
-                    yield Label("Export Options:", classes="subtitle")
-                    yield Button("Export CSV", id="btn_export_fb_csv")
-                    yield Button("Export PDF", id="btn_export_fb_pdf")
-
-        # Security Timer Label — docked above footer
+        # Security Timer Label -- docked above footer
         yield Label(f"Auto-logout: {self.AUTO_LOGOUT_SECONDS}s", id="logout_timer")
         yield Footer()
+
+    def _compose_profile_tab(self, user, currency) -> ComposeResult:
+        """Yields widgets for the My Profile tab."""
+        # Safe role access (handles both Enum and String cases)
+        role_val = user.role.value if hasattr(user.role, "value") else str(user.role)
+        role_name = user.role.name if hasattr(user.role, "name") else str(user.role)
+
+        yield Label(
+            f"Welcome, {role_val.title()} {user.first_name}!",
+            classes="title",
+            id="welcome_lbl",
+        )
+        yield Label(f"Account Type: {role_name}", id="lbl_role")
+        yield Label(f"Account #: {user.account_number}", id="lbl_acct")
+        yield Label("Credit Balance: $0.00", id="lbl_balance")
+
+        with Horizontal(classes="filter-row"):
+            yield Button("Edit My Information", id="edit_profile_btn")
+            yield Button("Change Password", id="change_pwd_btn")
+        with Horizontal(classes="filter-row"):
+            # Label updated on mount by update_signin_button
+            yield Button("Sign In to Makerspace", id="signin_btn")
+            yield Button("Logout", id="logout_btn")
+
+        yield Label("My Preferences", classes="subtitle")
+
+        yield Label("Preferred Visit Type (leave blank to always be asked):")
+        yield Select(
+            [("No preference (always ask)", "")] + [(vt, vt) for vt in VISIT_TYPES],
+            id="pref_visit_type",
+            value="",
+        )
+
+        yield Button("Save Preferences", id="btn_save_prefs")
+
+    def _compose_staff_tools_tab(self, user) -> ComposeResult:
+        """Yields widgets for the Staff Tools tab."""
+        with Vertical(classes="management-section"):
+            yield Label("User Management", classes="title")
+            yield Button("Register New Member (In-Person)", id="btn_staff_reg")
+
+        # Quick User Search
+        with Vertical(classes="management-section"):
+            yield Label("Quick User Search / Manage", classes="subtitle")
+            yield Label("Search for a user to open their management menu:")
+
+            with Horizontal(classes="search-row"):
+                yield Input(
+                    placeholder="Name or Email...",
+                    id="staff_user_search_input",
+                )
+                yield Button("Search", id="btn_staff_user_search")
+
+            yield DataTable(id="staff_user_search_table")
+
+        with Vertical(classes="pending-section"):
+            yield Label("Pending Approvals", classes="title")
+            yield DataTable(id="pending_table")
+            yield Label("Select a row, then click Approve.", classes="subtitle")
+
+            # Stacked buttons
+            with Vertical(classes="pending-buttons"):
+                yield Button(
+                    "Approve Selected Account",
+                    variant="success",
+                    id="approve_btn",
+                )
+                yield Button("Refresh List", id="refresh_pending")
+
+    def _compose_purchases_tab(self, user, currency) -> ComposeResult:
+        """Yields widgets for the Purchases tab."""
+        with VerticalScroll():
+            yield Label("Purchases", classes="title")
+
+            # === STAFF / ADMIN VIEW ===
+            if user.role in [models.UserRole.STAFF, models.UserRole.ADMIN]:
+                # Subsection 0: Manual Transaction (Point of Sale)
+                with Vertical(classes="purchase-section"):
+                    pos_cfg = square_service.get_pos_config()
+                    pos_btn_label = (
+                        "Send to Square Terminal"
+                        if pos_cfg.square_enabled
+                        else "Record Transaction"
+                    )
+                    yield Label("Manual Transaction", classes="subtitle")
+
+                    # Step 1: Inventory Cart
+                    with Vertical(classes="form-subsection"):
+                        yield Label(
+                            "Step 1: Select Items (Optional)",
+                            classes="subtitle",
+                        )
+                        yield Label(
+                            "Click an item row to select it, set the quantity,"
+                            " then click Add to Cart."
+                            " Amount and Description are auto-filled."
+                        )
+                        yield DataTable(id="inv_available_table")
+                        with Horizontal(classes="filter-row"):
+                            yield Label("Quantity:")
+                            yield Input("1", id="inv_qty", type="number")
+                            yield Button(
+                                "Add to Cart",
+                                variant="primary",
+                                id="btn_add_to_cart",
+                            )
+                        yield Label("Cart:", classes="subtitle")
+                        yield DataTable(id="inv_cart_table")
+                        with Horizontal(classes="filter-row"):
+                            yield Label("Cart Total: $0.00", id="inv_cart_total_lbl")
+                            yield Button(
+                                "Remove Selected",
+                                variant="error",
+                                id="btn_remove_from_cart",
+                                disabled=True,
+                            )
+                            yield Button("Clear Cart", id="btn_clear_cart")
+
+                    # Step 2: Add a custom line item not in the inventory list
+                    with Vertical(classes="form-subsection"):
+                        yield Label(
+                            "Step 2: Add Custom Item (Optional)",
+                            classes="subtitle",
+                        )
+                        yield Label(
+                            "Add charges not covered by the inventory above,"
+                            " e.g. a workshop fee or donation."
+                        )
+                        yield Label("Item Name / Description:")
+                        yield Input(
+                            placeholder="e.g. Workshop fee, Donation",
+                            id="pos_manual_desc",
+                        )
+                        yield Label("Price ($):")
+                        yield Input(
+                            placeholder="0.00",
+                            id="pos_manual_price",
+                            type="number",
+                        )
+                        with Horizontal(classes="filter-row"):
+                            yield Button(
+                                "Add Custom Item",
+                                variant="primary",
+                                id="btn_add_manual_to_cart",
+                            )
+
+                    # Step 3: Customer Details
+                    with Vertical(classes="form-subsection"):
+                        yield Label("Step 3: Customer Details", classes="subtitle")
+                        yield Label(
+                            "Search for an existing user to auto-fill, or"
+                            " enter details manually:"
+                        )
+                        with Horizontal(classes="search-row"):
+                            yield Input(
+                                placeholder="Search by name or email...",
+                                id="pos_customer_search_input",
+                            )
+                            yield Button(
+                                "Search",
+                                id="btn_pos_customer_search",
+                            )
+                        yield DataTable(id="pos_customer_search_table")
+
+                        yield Label("Customer Name:")
+                        yield Input(
+                            placeholder="First and Last Name",
+                            id="pos_customer_name",
+                        )
+                        yield Label(
+                            "Customer Email (required to send a receipt for cash transactions):"
+                        )
+                        yield Input(
+                            placeholder="customer@example.com",
+                            id="pos_customer_email",
+                        )
+                        yield Label("Customer Phone (optional):")
+                        yield Input(
+                            placeholder="Phone number",
+                            id="pos_customer_phone",
+                        )
+
+                    with Horizontal(classes="filter-row"):
+                        yield Button(
+                            pos_btn_label,
+                            variant="success",
+                            id="btn_process_manual_txn",
+                        )
+                        yield Button(
+                            "Record Cash Transaction",
+                            variant="warning",
+                            id="btn_record_cash_txn",
+                        )
+                        yield Button(
+                            "Clear Form",
+                            id="btn_clear_pos_form",
+                        )
+
+                    yield Label("Recent Transactions:", classes="subtitle")
+                    yield DataTable(id="pos_txns_table")
+
+                    with Horizontal(classes="filter-row"):
+                        yield Button(
+                            "Refresh",
+                            id="btn_refresh_pos_txns",
+                        )
+                        yield Button(
+                            "Check Terminal Status",
+                            variant="primary",
+                            id="btn_check_pos_status",
+                            disabled=True,
+                        )
+
+                # Subsection 1: Existing User Transactions (consolidated)
+                with Vertical(classes="purchase-section"):
+                    yield Label("Membership Transactions", classes="subtitle")
+                    yield Label(
+                        "Search for a user to manage their memberships, day passes, and credits:"
+                    )
+                    with Horizontal(classes="search-row"):
+                        yield Input(
+                            placeholder="Name or Email...",
+                            id="user_search_input",
+                        )
+                        yield Button("Search", id="btn_user_search")
+                    yield DataTable(id="user_search_table")
+                    yield Label("Actions for Selected User:", classes="subtitle")
+                    yield Label(
+                        "Search for a user above to enable actions.",
+                        classes="text-muted",
+                        id="lbl_no_user_hint",
+                    )
+                    # Row 1: Membership actions
+                    with Horizontal(classes="filter-row"):
+                        yield Button(
+                            "Add Membership",
+                            variant="success",
+                            id="btn_add_mem",
+                            disabled=True,
+                        )
+                        yield Button(
+                            "Edit Memberships",
+                            variant="primary",
+                            id="btn_edit_mem",
+                            disabled=True,
+                        )
+                    # Row 2: Day Pass actions
+                    with Horizontal(classes="filter-row"):
+                        yield Button(
+                            "Add Day Pass",
+                            variant="success",
+                            id="btn_add_daypass",
+                            disabled=True,
+                        )
+                        yield Button(
+                            "View Day Passes",
+                            variant="primary",
+                            id="btn_view_daypass",
+                            disabled=True,
+                        )
+                    # Row 3: Credits actions
+                    with Horizontal(classes="filter-row"):
+                        yield Button(
+                            f"Add {currency} (+)",
+                            variant="success",
+                            id="btn_credit",
+                            disabled=True,
+                        )
+                        yield Button(
+                            f"Deduct {currency} (-)",
+                            variant="error",
+                            id="btn_debit",
+                            disabled=True,
+                        )
+                        yield Button(
+                            f"View {currency}",
+                            variant="primary",
+                            id="btn_view_credits",
+                            disabled=True,
+                        )
+                    # Row 4: Square subscription actions
+                    with Horizontal(classes="filter-row"):
+                        yield Button(
+                            "Activate Square Membership Subscription",
+                            variant="success",
+                            id="btn_activate_subscription",
+                            disabled=True,
+                        )
+                        yield Button(
+                            "Cancel Subscription",
+                            variant="error",
+                            id="btn_cancel_subscription",
+                            disabled=True,
+                        )
+                        yield Button(
+                            "Poll Subscription Status",
+                            variant="primary",
+                            id="btn_poll_subscription",
+                            disabled=True,
+                        )
+
+            # === REGULAR USER VIEW ===
+            else:
+                # Subsection 1: My Memberships
+                with Vertical(classes="purchase-section"):
+                    yield Label("My Memberships", classes="subtitle")
+                    yield DataTable(id="my_mem_table")
+
+                # Subsection 2: My Day Passes
+                with Vertical(classes="purchase-section"):
+                    yield Label("My Day Passes", classes="subtitle")
+                    yield DataTable(id="my_daypass_table")
+
+                # Subsection 3: My Consumables
+                with Vertical(classes="purchase-section"):
+                    yield Label(f"My {currency} Ledger", classes="subtitle")
+                    yield Label(f"{currency} Balance: $0.00", id="my_balance_lbl")
+                    yield DataTable(id="my_cons_table")
+
+    def _compose_reports_tab(self) -> ComposeResult:
+        """Yields widgets for the Reports tab."""
+        yield Label("Membership Reports", classes="title")
+        yield Label("(Click any row to Manage User)", classes="subtitle")
+
+        yield Label("Filter by role:", classes="subtitle")
+        with Horizontal(classes="filter-row"):
+            yield Checkbox("Admin", value=True, id="chk_admin")
+            yield Checkbox("Staff", value=True, id="chk_staff")
+            yield Checkbox("Member (Active)", value=True, id="chk_member")
+            yield Checkbox("Community (Inactive)", value=False, id="chk_community")
+            yield Checkbox("Signed In", value=False, id="chk_signed_in")
+
+        yield Button("Refresh Report", id="load_members")
+        yield DataTable(id="members_table")
+
+        yield Label("Export Options:", classes="subtitle")
+        yield Button("Export CSV", id="btn_export_members_csv")
+        yield Button("Export PDF", id="btn_export_members_pdf")
+
+        yield Label("Admin and Statistics Reports:", classes="subtitle")
+        yield Button(
+            "Export Period Traction Report",
+            id="btn_period_traction_report",
+        )
+        yield Button(
+            "Export Community Contacts Report",
+            id="btn_community_contacts_report",
+        )
+        yield Button(
+            "Export Everything People CSV Report",
+            id="btn_everything_people_csv",
+        )
+
+    def _compose_storage_tab(self) -> ComposeResult:
+        """Yields widgets for the Storage tab."""
+        with VerticalScroll():
+            yield Label("Member Storage", classes="title")
+
+            # Active storage assignments
+            yield Label("Active Storage Assignments", classes="subtitle")
+            yield DataTable(id="storage_active_table")
+            with Horizontal(classes="filter-row"):
+                yield Button(
+                    "Assign Storage",
+                    variant="success",
+                    id="btn_storage_assign",
+                )
+                yield Button(
+                    "View Selected",
+                    id="btn_storage_view",
+                    disabled=True,
+                )
+                yield Button(
+                    "Edit Selected",
+                    variant="primary",
+                    id="btn_storage_edit",
+                    disabled=True,
+                )
+                yield Button(
+                    "Remove Selected (Archive)",
+                    variant="error",
+                    id="btn_storage_archive",
+                    disabled=True,
+                )
+                yield Button("Refresh", id="btn_storage_refresh")
+
+            # Archived storage assignments
+            yield Label("Archived Storage Assignments", classes="subtitle")
+            yield DataTable(id="storage_archived_table")
+
+    def _compose_database_tab(self) -> ComposeResult:
+        """Yields widgets for the Database tab."""
+        sql_console_enabled = (
+            services.get_setting("sql_console_enabled", "true").lower() == "true"
+        )
+
+        if not sql_console_enabled:
+            yield Label(
+                "SQL Console is disabled by the administrator.",
+                classes="subtitle",
+            )
+        else:
+            # --- LOCKED STATE VIEW ---
+            with Center(id="db_lock_wrapper"):
+                with Vertical(id="db_locked_view", classes="login-container"):
+                    yield Label("SECURITY WARNING", classes="title error")
+                    yield Label(
+                        "You are accessing Raw SQL Controls.",
+                        classes="subtitle",
+                    )
+                    yield Label(
+                        "Bad commands can permanently DELETE or CORRUPT data.",
+                        classes="error",
+                    )
+                    yield Label("Proceed with extreme caution.", classes="subtitle")
+
+                    yield Input(
+                        placeholder="Confirm Admin Password",
+                        password=True,
+                        id="db_pass_input",
+                    )
+
+                    yield Button("Unlock", variant="error", id="btn_verify_unlock")
+
+            # --- UNLOCKED STATE VIEW (Hidden Initially) ---
+            with Vertical(id="db_unlocked_view", classes="hidden"):
+                yield Label("Raw SQL Execution (Danger Zone)", classes="title")
+
+                with Vertical(classes="query-presets"):
+                    yield Label("Common Queries (Click to Load):")
+                    yield Button(
+                        "1. Users with Medical/Allergy Info",
+                        id="sql_q1",
+                        classes="sql-btn",
+                    )
+                    yield Button(
+                        "2. Emergency Contact List",
+                        id="sql_q2",
+                        classes="sql-btn",
+                    )
+                    yield Button(
+                        "3. Members Missing Safety Orientation",
+                        id="sql_q3",
+                        classes="sql-btn",
+                    )
+                    yield Button(
+                        "4. Count Users by Role",
+                        id="sql_q4",
+                        classes="sql-btn",
+                    )
+                    yield Button(
+                        "5. Attendance Report (Date Range)",
+                        id="sql_q5",
+                        classes="sql-btn",
+                    )
+
+                yield Input(
+                    placeholder="Enter custom SQL query here...",
+                    id="sql_input",
+                )
+                yield Button("Execute SQL", variant="error", id="exec_sql_btn")
+
+                yield Label("", id="sql_status")
+
+                yield DataTable(id="sql_results")
+
+                with Vertical(classes="export-section"):
+                    yield Label("Export Options:", classes="subtitle")
+                    yield Button("Export Results CSV", id="btn_export_sql_csv")
+                    yield Button("Export Results PDF", id="btn_export_sql_pdf")
+
+    def _compose_feedback_tab(self, user) -> ComposeResult:
+        """Yields widgets for the Feedback tab."""
+        yield Label("Submit Feedback / Bug Reports", classes="title")
+
+        with Horizontal(classes="agreement-row"):
+            yield Checkbox("General Feedback", id="chk_fb_general")
+            yield Checkbox("Feature Request", id="chk_fb_feature")
+            yield Checkbox("Bug Report", id="chk_fb_bug")
+            yield Label("   ")
+            yield Checkbox("URGENT", id="chk_fb_urgent")
+
+        yield Input(placeholder="Type your comment here...", id="fb_comment")
+        yield Button("Submit Feedback", variant="primary", id="btn_submit_feedback")
+
+        # --- VISIBILITY RESTRICTION: Only Staff/Admin see the table and exports ---
+        if user.role in [models.UserRole.STAFF, models.UserRole.ADMIN]:
+            yield Label("Recent Submissions", classes="subtitle")
+            yield DataTable(id="feedback_table")
+            yield Button("Refresh List", id="btn_refresh_feedback")
+
+            yield Label("Export Options:", classes="subtitle")
+            yield Button("Export CSV", id="btn_export_fb_csv")
+            yield Button("Export PDF", id="btn_export_fb_pdf")
+
+    def _init_table(self, table_id, columns, cursor_type="row"):
+        """Initialises a DataTable widget with the given columns and cursor type.
+
+        Args:
+            table_id: The DOM id of the DataTable (without '#' prefix).
+            columns: Either a tuple of column name strings (simple add_columns)
+                     or a list of (name, width) tuples (individual add_column).
+            cursor_type: The cursor type to set on the table.
+        """
+        try:
+            table = self.query_one(f"#{table_id}", DataTable)
+        except Exception:
+            return
+        if isinstance(columns, list):
+            # List of (name, width) tuples -- use individual add_column calls
+            for col_name, col_width in columns:
+                table.add_column(col_name, width=col_width)
+        else:
+            # Plain tuple of strings -- use add_columns
+            table.add_columns(*columns)
+        table.cursor_type = cursor_type
+
+    def _build_dispatch(self):
+        """Builds and returns the button ID to handler mapping for on_button_pressed."""
+        return {
+            "logout_btn": self._handle_logout,
+            "signin_btn": self._handle_signin,
+            "change_pwd_btn": lambda: self.app.push_screen(ChangePasswordScreen()),
+            "edit_profile_btn": lambda: self.app.push_screen(
+                EditProfileScreen(), self.refresh_profile
+            ),
+            "btn_staff_reg": lambda: self.app.push_screen(
+                RegisterScreen(staff_mode=True)
+            ),
+            "btn_save_prefs": self.save_user_preferences,
+            # Inventory cart handlers
+            "btn_add_to_cart": self.add_to_cart,
+            "btn_add_manual_to_cart": self.add_manual_to_cart,
+            "btn_remove_from_cart": self.remove_from_cart,
+            "btn_clear_cart": self.clear_cart,
+            # Storage tab handlers
+            "btn_storage_assign": self.open_storage_assign_modal,
+            "btn_storage_view": self.open_storage_view_modal,
+            "btn_storage_edit": self.open_storage_edit_modal,
+            "btn_storage_archive": self.archive_storage_assignment,
+            "btn_storage_refresh": self.load_storage_assignments,
+            # Feedback handlers
+            "btn_submit_feedback": self.submit_feedback_action,
+            "btn_refresh_feedback": self.load_feedback,
+            "btn_export_fb_csv": lambda: self.initiate_export(
+                "#feedback_table", "feedback_report", "csv", full_feedback=True
+            ),
+            "btn_export_fb_pdf": lambda: self.initiate_export(
+                "#feedback_table", "feedback_report", "pdf", full_feedback=True
+            ),
+            # Pending / members
+            "refresh_pending": self._handle_refresh_pending,
+            "load_members": self.load_members,
+            "approve_btn": self._handle_approve,
+            # Staff tool search
+            "btn_staff_user_search": self.action_staff_user_search,
+            # Database lock
+            "btn_verify_unlock": self.verify_database_unlock,
+            # SQL execution
+            "exec_sql_btn": lambda: self.run_raw_sql(
+                self.query_one("#sql_input").value
+            ),
+            # Export handlers
+            "btn_export_members_csv": lambda: self.initiate_export(
+                "#members_table", "members_report", "csv"
+            ),
+            "btn_export_members_pdf": lambda: self.initiate_export(
+                "#members_table", "members_report", "pdf"
+            ),
+            "btn_export_sql_csv": lambda: self.initiate_export(
+                "#sql_results", "sql_query_result", "csv"
+            ),
+            "btn_export_sql_pdf": lambda: self.initiate_export(
+                "#sql_results", "sql_query_result", "pdf"
+            ),
+            "btn_period_traction_report": lambda: self.app.push_screen(
+                PeriodTractionReportModal()
+            ),
+            "btn_community_contacts_report": lambda: self.app.push_screen(
+                CommunityContactsReportModal()
+            ),
+            "btn_everything_people_csv": self.initiate_everything_people_csv,
+            # Unified user search
+            "btn_user_search": self.action_search_users,
+            # Membership actions
+            "btn_add_mem": self._handle_add_mem,
+            "btn_edit_mem": self._handle_edit_mem,
+            # Day pass actions
+            "btn_add_daypass": self._handle_add_daypass,
+            "btn_view_daypass": self._handle_view_daypass,
+            # Credits actions
+            "btn_credit": self._handle_credit,
+            "btn_debit": self._handle_debit,
+            "btn_view_credits": self._handle_view_credits,
+            # Square subscription actions
+            "btn_activate_subscription": self._handle_activate_subscription,
+            "btn_cancel_subscription": self._handle_cancel_subscription,
+            "btn_poll_subscription": self._handle_poll_subscription,
+            # POS customer search
+            "btn_pos_customer_search": self.action_pos_customer_search,
+            # POS / manual transaction actions
+            "btn_process_manual_txn": self.process_manual_transaction,
+            "btn_record_cash_txn": self.record_cash_transaction,
+            "btn_clear_pos_form": self.clear_pos_form,
+            "btn_refresh_pos_txns": self.load_pos_transactions,
+            "btn_check_pos_status": self.check_pos_terminal_status,
+        }
+
+    # --- Small handler methods extracted from on_button_pressed inline logic ---
+
+    def _handle_logout(self):
+        """Logs the current user out and returns to the previous screen."""
+        self.app.current_user = None
+        self.app.pop_screen()
+
+    def _handle_signin(self):
+        """Handles sign-in/sign-out toggle for the current user."""
+        acct = self.app.current_user.account_number
+        try:
+            if services.is_user_signed_in(acct):
+                self.app.push_screen(ConfirmSignOutScreen(), self.on_signout_confirm)
+            else:
+                # Use the user's preferred visit type if set, otherwise show the selector
+                pref_type = services.get_user_preference(
+                    acct, "preferred_visit_type", ""
+                )
+                if pref_type:
+                    self.on_visit_type_selected(acct, pref_type)
+                else:
+                    self.app.push_screen(
+                        SelectVisitTypeModal(),
+                        partial(self.on_visit_type_selected, acct),
+                    )
+        except ValueError as e:
+            self.app.notify(str(e), severity="error")
+
+    def _handle_refresh_pending(self):
+        """Refreshes the pending approvals list and alert banner."""
+        self.load_pending()
+        self.update_pending_alert()
+
+    def _handle_approve(self):
+        """Approves the currently selected pending user account."""
+        table = self.query_one("#pending_table")
+        try:
+            row_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key
+            row_data = table.get_row(row_key)
+            acct_num = int(row_data[0])
+            services.approve_user(self.app.current_user.account_number, acct_num)
+            self.app.notify(f"Approved User {acct_num}")
+            self.load_pending()
+            self.update_pending_alert()
+        except Exception:
+            self.app.notify("Select a user first", severity="warning")
+
+    def _handle_add_mem(self):
+        """Opens the Add Membership modal for the selected user."""
+        if self.selected_user_acct:
+            self.app.push_screen(
+                AddMembershipModal(self.selected_user_acct),
+                self._refresh_user_table,
+            )
+
+    def _handle_edit_mem(self):
+        """Opens the Manage Memberships modal for the selected user."""
+        if self.selected_user_acct:
+            self.app.push_screen(ManageMembershipsModal(self.selected_user_acct))
+
+    def _handle_add_daypass(self):
+        """Opens the Add Day Pass modal for the selected user."""
+        if self.selected_user_acct:
+            self.app.push_screen(
+                AddDayPassModal(self.selected_user_acct), self._refresh_user_table
+            )
+
+    def _handle_view_daypass(self):
+        """Opens the Day Pass History modal for the selected user."""
+        if self.selected_user_acct:
+            self.app.push_screen(DayPassHistoryModal(self.selected_user_acct))
+
+    def _handle_credit(self):
+        """Opens the credit transaction modal for the selected user."""
+        if self.selected_user_acct:
+            currency = services.get_setting("app_currency_name", "Credits")
+            self.app.push_screen(
+                TransactionModal(self.selected_user_acct, "credit", currency),
+                self._refresh_user_table,
+            )
+
+    def _handle_debit(self):
+        """Opens the debit transaction modal for the selected user."""
+        if self.selected_user_acct:
+            currency = services.get_setting("app_currency_name", "Credits")
+            self.app.push_screen(
+                TransactionModal(self.selected_user_acct, "debit", currency),
+                self._refresh_user_table,
+            )
+
+    def _handle_view_credits(self):
+        """Opens the View Credits modal for the selected user."""
+        if self.selected_user_acct:
+            currency = services.get_setting("app_currency_name", "Credits")
+            self.app.push_screen(ViewCreditsModal(self.selected_user_acct, currency))
+
+    def _handle_activate_subscription(self):
+        """Opens the Activate Subscription modal for the selected user."""
+        if self.selected_user_acct:
+            self.app.push_screen(
+                ActivateSubscriptionModal(self.selected_user_acct),
+                self._refresh_user_table,
+            )
+
+    def _handle_cancel_subscription(self):
+        """Cancels the Square subscription for the selected user."""
+        if self.selected_user_acct:
+            ok, msg = square_service.cancel_square_subscription(self.selected_user_acct)
+            severity = "information" if ok else "error"
+            self.app.notify(msg, severity=severity)
+
+    def _handle_poll_subscription(self):
+        """Polls the Square subscription status for the selected user."""
+        if self.selected_user_acct:
+            ok, msg = square_service.poll_member_subscription(self.selected_user_acct)
+            severity = "information" if ok else "error"
+            self.app.notify(msg, severity=severity)
 
     def on_mount(self):
         user = self.app.current_user
@@ -1392,7 +989,10 @@ class Dashboard(Screen):
         self._inv_selected_cart_key = None
         self._manual_entry_counter = 0
 
-        # Initialize Security Timer — read timeout from DB, fall back to class default
+        # Build button dispatch table for on_button_pressed
+        self._dispatch = self._build_dispatch()
+
+        # Initialize Security Timer -- read timeout from DB, fall back to class default
         try:
             self.AUTO_LOGOUT_SECONDS = (
                 int(services.get_setting("logout_timeout_minutes", "10")) * 60
@@ -1402,125 +1002,20 @@ class Dashboard(Screen):
         self.last_activity = time.time()
         self.set_interval(1.0, self.update_security_timer)
 
-        # Initialize Feedback Table ONLY if visible
-        if user.role in [models.UserRole.STAFF, models.UserRole.ADMIN]:
-            fb_table = self.query_one("#feedback_table", DataTable)
-            if fb_table:
-                # UPDATED: Replaced add_columns with individual add_column calls to set explicit widths
-                fb_table.add_column("ID", width=4)
-                fb_table.add_column("Date", width=18)
-                fb_table.add_column("Name", width=20)
-                fb_table.add_column("Urgent", width=8)
-                fb_table.add_column("Comment Preview", width=45)
-                fb_table.add_column("Response", width=45)
+        # Initialize tables using the configuration list
+        # Only init tables that exist in the current DOM (role-dependent tabs
+        # may not have rendered all tables)
+        for cfg in self._TABLE_CONFIGS:
+            self._init_table(cfg["id"], cfg["columns"], cfg.get("cursor_type", "row"))
 
-                fb_table.cursor_type = "row"
+        # Initialize Feedback data ONLY if visible
+        if user.role in [models.UserRole.STAFF, models.UserRole.ADMIN]:
             self.load_feedback()
 
-        # Permissions check for Staff/Admin tables
+        # Permissions check for Staff/Admin data loading
         if user.role in [models.UserRole.STAFF, models.UserRole.ADMIN]:
-            # Initialize Tables
-            pending_table = self.query_one("#pending_table", DataTable)
-            if pending_table:
-                pending_table.add_columns("Acct #", "Name", "Email", "Date Joined")
-                pending_table.cursor_type = "row"
-
-            members_table = self.query_one("#members_table", DataTable)
-            if members_table:
-                members_table.add_columns("Acct #", "Name", "Role", "Email")
-                members_table.cursor_type = "row"
-
-            # Initialize Unified User Search Table
-            user_search_table = self.query_one("#user_search_table", DataTable)
-            if user_search_table:
-                user_search_table.add_columns("Acct #", "Name", "Email")
-                user_search_table.cursor_type = "row"
-
-            # Initialize Staff Tool Search Table
-            st_table = self.query_one("#staff_user_search_table", DataTable)
-            if st_table:
-                st_table.add_columns("Acct #", "Name", "Email")
-                st_table.cursor_type = "row"
-
-            # Initialize POS transactions table
-            pos_table = self.query_one("#pos_txns_table", DataTable)
-            if pos_table:
-                pos_table.add_column("ID", width=5)
-                pos_table.add_column("Date", width=18)
-                pos_table.add_column("Customer", width=22)
-                pos_table.add_column("Amount", width=10)
-                pos_table.add_column("Description", width=28)
-                pos_table.add_column("Status", width=12)
-                pos_table.add_column("Via", width=8)
-                pos_table.cursor_type = "row"
             self.load_pos_transactions()
-
-            # Initialize inventory cart tables (Purchases tab)
-            inv_available = self.query_one("#inv_available_table", DataTable)
-            if inv_available:
-                inv_available.add_column("ID", width=5)
-                inv_available.add_column("Name", width=28)
-                inv_available.add_column("Description", width=35)
-                inv_available.add_column("Price", width=10)
-                inv_available.cursor_type = "row"
-            inv_cart = self.query_one("#inv_cart_table", DataTable)
-            if inv_cart:
-                inv_cart.add_column("Item", width=28)
-                inv_cart.add_column("Qty", width=6)
-                inv_cart.add_column("Unit Price", width=12)
-                inv_cart.add_column("Subtotal", width=12)
-                inv_cart.cursor_type = "row"
             self._load_inv_available_table()
-
-            # Initialize Product Tier tables (admin Settings tab)
-            if user.role == models.UserRole.ADMIN:
-                mem_tiers_table = self.query_one("#tbl_mem_tiers", DataTable)
-                if mem_tiers_table:
-                    mem_tiers_table.add_columns("ID", "Name", "Price", "Duration (days)", "Credits", "Description")
-                    mem_tiers_table.cursor_type = "row"
-                dp_tiers_table = self.query_one("#tbl_dp_tiers", DataTable)
-                if dp_tiers_table:
-                    dp_tiers_table.add_columns("ID", "Name", "Price", "Description")
-                    dp_tiers_table.cursor_type = "row"
-                self.load_product_tiers()
-
-                # Initialize Storage Units settings table (admin only)
-                storage_units_table = self.query_one("#tbl_storage_units", DataTable)
-                if storage_units_table:
-                    storage_units_table.add_columns("ID", "Unit Number", "Description")
-                    storage_units_table.cursor_type = "row"
-                self.load_storage_units_settings()
-
-                # Initialize Inventory settings table (admin only)
-                inv_settings_table = self.query_one("#tbl_inventory_items", DataTable)
-                if inv_settings_table:
-                    inv_settings_table.add_columns("ID", "Name", "Description", "Price")
-                    inv_settings_table.cursor_type = "row"
-                self.load_inventory_settings()
-
-            # Initialize Storage tab tables (staff and admin)
-            storage_active = self.query_one("#storage_active_table", DataTable)
-            if storage_active:
-                storage_active.add_column("ID", width=5)
-                storage_active.add_column("Unit", width=10)
-                storage_active.add_column("Assigned To", width=22)
-                storage_active.add_column("Item", width=28)
-                storage_active.add_column("Notes", width=22)
-                storage_active.add_column("Charge Type", width=20)
-                storage_active.add_column("Total", width=10)
-                storage_active.add_column("Assigned At", width=18)
-                storage_active.cursor_type = "row"
-
-            storage_archived = self.query_one("#storage_archived_table", DataTable)
-            if storage_archived:
-                storage_archived.add_column("ID", width=5)
-                storage_archived.add_column("Unit", width=10)
-                storage_archived.add_column("Assigned To", width=22)
-                storage_archived.add_column("Item", width=28)
-                storage_archived.add_column("Charge Type", width=20)
-                storage_archived.add_column("Total", width=10)
-                storage_archived.add_column("Archived At", width=18)
-                storage_archived.cursor_type = "row"
             self.load_storage_assignments()
 
             self.load_pending()
@@ -1683,6 +1178,14 @@ class Dashboard(Screen):
                 self.query_one(f"#{btn_id}").disabled = not square_active
             self.app.notify(f"Selected: {row_data[1]}")
 
+        elif event.data_table.id == "pos_customer_search_table":
+            # Auto-fill customer detail fields from the selected user row
+            row_data = event.data_table.get_row(event.row_key)
+            self.query_one("#pos_customer_name", Input).value = str(row_data[1])
+            self.query_one("#pos_customer_email", Input).value = str(row_data[2])
+            self.query_one("#pos_customer_phone", Input).value = str(row_data[3])
+            self.app.notify(f"Customer details filled: {row_data[1]}")
+
         elif event.data_table.id == "pos_txns_table":
             row_data = event.data_table.get_row(event.row_key)
             self.selected_pos_txn_id = int(row_data[0])
@@ -1690,24 +1193,6 @@ class Dashboard(Screen):
             via = str(row_data[6])
             self.query_one("#btn_check_pos_status").disabled = via != "Square"
             self.app.notify(f"Selected transaction #{self.selected_pos_txn_id}")
-
-        elif event.data_table.id == "tbl_mem_tiers":
-            row_data = event.data_table.get_row(event.row_key)
-            self.selected_mem_tier_id = int(row_data[0])
-
-        elif event.data_table.id == "tbl_dp_tiers":
-            row_data = event.data_table.get_row(event.row_key)
-            self.selected_dp_tier_id = int(row_data[0])
-
-        elif event.data_table.id == "tbl_storage_units":
-            row_data = event.data_table.get_row(event.row_key)
-            self.selected_storage_unit_id = int(row_data[0])
-            self.query_one("#btn_delete_storage_unit").disabled = False
-
-        elif event.data_table.id == "tbl_inventory_items":
-            row_data = event.data_table.get_row(event.row_key)
-            self.selected_inventory_item_id = int(row_data[0])
-            self.query_one("#btn_delete_inventory_item").disabled = False
 
         elif event.data_table.id == "inv_available_table":
             row_data = event.data_table.get_row(event.row_key)
@@ -1725,6 +1210,8 @@ class Dashboard(Screen):
         elif event.data_table.id == "storage_active_table":
             row_data = event.data_table.get_row(event.row_key)
             self.selected_storage_assignment_id = int(row_data[0])
+            self.query_one("#btn_storage_view").disabled = False
+            self.query_one("#btn_storage_edit").disabled = False
             self.query_one("#btn_storage_archive").disabled = False
 
     def refresh_feedback_after_modal(self, result: bool = False):
@@ -1792,46 +1279,8 @@ class Dashboard(Screen):
             self.action_search_users()
         elif event.input.id == "staff_user_search_input":
             self.action_staff_user_search()
-
-    def on_tabbed_content_tab_activated(self, event: TabbedContent.TabActivated):
-        # TextArea.wrap_width reads scrollable_content_region.size, which is zero
-        # while the pane is hidden. Deferring via call_after_refresh lets the layout
-        # engine compute the real size before load_text wraps the content.
-        self.call_after_refresh(self._load_ascii_logo_if_needed)
-
-    # Maps settings nav ListItem IDs to their corresponding ContentSwitcher panel IDs.
-    _SETTINGS_NAV_MAP = {
-        "nav_settings_general":          "settings_panel_general",
-        "nav_settings_operations":       "settings_panel_operations",
-        "nav_settings_branding":         "settings_panel_branding",
-        "nav_settings_security":         "settings_panel_security",
-        "nav_settings_pos":              "settings_panel_pos",
-        "nav_settings_subscriptions":    "settings_panel_subscriptions",
-        "nav_settings_products":         "settings_panel_products",
-        "nav_settings_storage":          "settings_panel_storage",
-        "nav_settings_inventory":        "settings_panel_inventory",
-        "nav_settings_email":            "settings_panel_email",
-    }
-
-    def on_list_view_selected(self, event: ListView.Selected) -> None:
-        """Switch the visible settings panel when a nav item is chosen."""
-        panel_id = self._SETTINGS_NAV_MAP.get(event.item.id)
-        if panel_id is None:
-            return
-        self.reset_activity()
-        self.query_one("#settings_content", ContentSwitcher).current = panel_id
-        # The ASCII logo TextArea needs a deferred load because its wrap_width
-        # is zero while the panel is hidden; trigger once the layout recalculates.
-        if panel_id == "settings_panel_branding":
-            self.call_after_refresh(self._load_ascii_logo_if_needed)
-
-    def _load_ascii_logo_if_needed(self):
-        results = self.query("#setting_ascii_logo")
-        if not results:
-            return
-        logo_area = results.first(TextArea)
-        if not logo_area.text:
-            logo_area.load_text(services.get_setting("ascii_logo", settings.ASCII_LOGO))
+        elif event.input.id == "pos_customer_search_input":
+            self.action_pos_customer_search()
 
     MEMBER_FILTER_CHECKBOXES = {
         "chk_admin",
@@ -1857,270 +1306,39 @@ class Dashboard(Screen):
 
     def on_button_pressed(self, event: Button.Pressed):
         self.reset_activity()
-        if event.button.id == "logout_btn":
-            self.app.current_user = None
-            self.app.pop_screen()
-        elif event.button.id == "signin_btn":
-            acct = self.app.current_user.account_number
-            try:
-                if services.is_user_signed_in(acct):
-                    self.app.push_screen(
-                        ConfirmSignOutScreen(), self.on_signout_confirm
-                    )
-                else:
-                    # Use the user's preferred visit type if set, otherwise show the selector
-                    pref_type = services.get_user_preference(
-                        acct, "preferred_visit_type", ""
-                    )
-                    if pref_type:
-                        self.on_visit_type_selected(acct, pref_type)
-                    else:
-                        self.app.push_screen(
-                            SelectVisitTypeModal(),
-                            partial(self.on_visit_type_selected, acct),
-                        )
-            except ValueError as e:
-                self.app.notify(str(e), severity="error")
-        elif event.button.id == "change_pwd_btn":
-            self.app.push_screen(ChangePasswordScreen())
-        elif event.button.id == "edit_profile_btn":
-            self.app.push_screen(EditProfileScreen(), self.refresh_profile)
-        elif event.button.id == "btn_staff_reg":
-            self.app.push_screen(RegisterScreen(staff_mode=True))
-        elif event.button.id == "btn_save_prefs":
-            self.save_user_preferences()
+        btn_id = event.button.id
 
-        elif event.button.id == "btn_save_general":
-            self.save_settings_general()
-        elif event.button.id == "btn_save_operations":
-            self.save_settings_operations()
-        elif event.button.id == "btn_save_branding":
-            self.save_settings_branding()
-        elif event.button.id == "btn_save_security":
-            self.save_settings_security()
-        elif event.button.id == "btn_save_api_key":
-            self.save_api_key()
-        elif event.button.id == "btn_save_email":
-            self.save_settings_email()
-        elif event.button.id == "btn_test_email":
-            self.send_test_email()
+        # Check SQL presets first
+        if btn_id in self._SQL_PRESETS:
+            self.query_one("#sql_input").value = self._SQL_PRESETS[btn_id]
+            return
 
-        # --- SUBSCRIPTION SETTINGS HANDLERS ---
-        elif event.button.id == "btn_save_subscription_settings":
-            self.save_subscription_settings()
-        elif event.button.id == "btn_poll_all_subscriptions":
-            self.poll_all_subscriptions()
+        handler = self._dispatch.get(btn_id)
+        if handler:
+            handler()
 
-        # --- STORAGE SETTINGS HANDLERS ---
-        elif event.button.id == "btn_create_storage_unit":
-            self.create_storage_unit()
-        elif event.button.id == "btn_delete_storage_unit":
-            self.delete_storage_unit()
+    def action_pos_customer_search(self):
+        """Search for existing users to auto-fill POS customer details."""
+        query = self.query_one("#pos_customer_search_input").value.strip()
+        table = self.query_one("#pos_customer_search_table", DataTable)
+        table.clear()
 
-        # --- INVENTORY SETTINGS HANDLERS ---
-        elif event.button.id == "btn_add_inventory_item":
-            self.create_inventory_item_action()
-        elif event.button.id == "btn_delete_inventory_item":
-            self.delete_inventory_item_action()
+        if not query:
+            self.app.notify("Please enter a search term.", severity="error")
+            return
 
-        # --- INVENTORY CART HANDLERS ---
-        elif event.button.id == "btn_add_to_cart":
-            self.add_to_cart()
-        elif event.button.id == "btn_add_manual_to_cart":
-            self.add_manual_to_cart()
-        elif event.button.id == "btn_remove_from_cart":
-            self.remove_from_cart()
-        elif event.button.id == "btn_clear_cart":
-            self.clear_cart()
+        results = services.search_users(query)
+        if not results:
+            self.app.notify("No users found.", severity="warning")
+            return
 
-        # --- STORAGE TAB HANDLERS ---
-        elif event.button.id == "btn_storage_assign":
-            self.open_storage_assign_modal()
-        elif event.button.id == "btn_storage_archive":
-            self.archive_storage_assignment()
-        elif event.button.id == "btn_storage_refresh":
-            self.load_storage_assignments()
-
-        # --- FEEDBACK HANDLERS ---
-        elif event.button.id == "btn_submit_feedback":
-            self.submit_feedback_action()
-        elif event.button.id == "btn_refresh_feedback":
-            self.load_feedback()
-        elif event.button.id == "btn_export_fb_csv":
-            self.initiate_export(
-                "#feedback_table", "feedback_report", "csv", full_feedback=True
+        for u in results:
+            table.add_row(
+                str(u.account_number),
+                f"{u.first_name} {u.last_name}",
+                u.email,
+                u.phone or "",
             )
-        elif event.button.id == "btn_export_fb_pdf":
-            self.initiate_export(
-                "#feedback_table", "feedback_report", "pdf", full_feedback=True
-            )
-
-        elif event.button.id == "refresh_pending":
-            self.load_pending()
-            self.update_pending_alert()
-        elif event.button.id == "load_members":
-            self.load_members()
-        elif event.button.id == "approve_btn":
-            table = self.query_one("#pending_table")
-            try:
-                row_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key
-                row_data = table.get_row(row_key)
-                acct_num = int(row_data[0])
-                services.approve_user(self.app.current_user.account_number, acct_num)
-                self.app.notify(f"Approved User {acct_num}")
-                self.load_pending()
-                self.update_pending_alert()
-            except Exception:
-                self.app.notify("Select a user first", severity="warning")
-
-        # --- STAFF TOOL SEARCH ---
-        elif event.button.id == "btn_staff_user_search":
-            self.action_staff_user_search()
-
-        # --- DATABASE LOCK HANDLERS ---
-        elif event.button.id == "btn_verify_unlock":
-            self.verify_database_unlock()
-
-        # --- SQL PRESETS ---
-        elif event.button.id == "sql_q1":
-            self.query_one(
-                "#sql_input"
-            ).value = "SELECT first_name, last_name, allergies, health_concerns FROM user WHERE allergies != '' OR health_concerns != ''"
-        elif event.button.id == "sql_q2":
-            self.query_one(
-                "#sql_input"
-            ).value = "SELECT first_name, last_name, emergency_first_name, emergency_phone FROM user"
-        elif event.button.id == "sql_q3":
-            self.query_one(
-                "#sql_input"
-            ).value = "SELECT u.first_name, u.last_name, u.email FROM user u JOIN safetytraining s ON u.account_number = s.user_account_number WHERE s.orientation = 0"
-        elif event.button.id == "sql_q4":
-            self.query_one(
-                "#sql_input"
-            ).value = "SELECT role, COUNT(*) as count FROM user GROUP BY role"
-        elif event.button.id == "sql_q5":
-            self.query_one(
-                "#sql_input"
-            ).value = "SELECT u.first_name, u.last_name, s.sign_in_time, s.sign_out_time FROM spaceattendance s JOIN user u ON s.user_account_number = u.account_number WHERE s.sign_in_time BETWEEN '2025-01-01 00:00:00' AND '2025-12-31 23:59:59'"
-
-        elif event.button.id == "exec_sql_btn":
-            query = self.query_one("#sql_input").value
-            self.run_raw_sql(query)
-
-        # --- EXPORT HANDLERS ---
-        elif event.button.id == "btn_export_members_csv":
-            self.initiate_export("#members_table", "members_report", "csv")
-        elif event.button.id == "btn_export_members_pdf":
-            self.initiate_export("#members_table", "members_report", "pdf")
-        elif event.button.id == "btn_export_sql_csv":
-            self.initiate_export("#sql_results", "sql_query_result", "csv")
-        elif event.button.id == "btn_export_sql_pdf":
-            self.initiate_export("#sql_results", "sql_query_result", "pdf")
-        elif event.button.id == "btn_period_traction_report":
-            self.app.push_screen(PeriodTractionReportModal())
-        elif event.button.id == "btn_community_contacts_report":
-            self.app.push_screen(CommunityContactsReportModal())
-        elif event.button.id == "btn_everything_people_csv":
-            self.initiate_everything_people_csv()
-
-        # --- UNIFIED USER SEARCH ---
-        elif event.button.id == "btn_user_search":
-            self.action_search_users()
-
-        # --- MEMBERSHIP ACTIONS ---
-        elif event.button.id == "btn_add_mem":
-            if self.selected_user_acct:
-                self.app.push_screen(
-                    AddMembershipModal(self.selected_user_acct),
-                    self._refresh_user_table,
-                )
-        elif event.button.id == "btn_edit_mem":
-            if self.selected_user_acct:
-                self.app.push_screen(ManageMembershipsModal(self.selected_user_acct))
-
-        # --- DAY PASS ACTIONS ---
-        elif event.button.id == "btn_add_daypass":
-            if self.selected_user_acct:
-                self.app.push_screen(
-                    AddDayPassModal(self.selected_user_acct), self._refresh_user_table
-                )
-        elif event.button.id == "btn_view_daypass":
-            if self.selected_user_acct:
-                self.app.push_screen(DayPassHistoryModal(self.selected_user_acct))
-
-        # --- CREDITS ACTIONS ---
-        elif event.button.id == "btn_credit":
-            if self.selected_user_acct:
-                currency = services.get_setting("app_currency_name", "Credits")
-                self.app.push_screen(
-                    TransactionModal(self.selected_user_acct, "credit", currency),
-                    self._refresh_user_table,
-                )
-        elif event.button.id == "btn_debit":
-            if self.selected_user_acct:
-                currency = services.get_setting("app_currency_name", "Credits")
-                self.app.push_screen(
-                    TransactionModal(self.selected_user_acct, "debit", currency),
-                    self._refresh_user_table,
-                )
-        elif event.button.id == "btn_view_credits":
-            if self.selected_user_acct:
-                currency = services.get_setting("app_currency_name", "Credits")
-                self.app.push_screen(
-                    ViewCreditsModal(self.selected_user_acct, currency)
-                )
-
-        # --- SQUARE SUBSCRIPTION ACTIONS ---
-        elif event.button.id == "btn_activate_subscription":
-            if self.selected_user_acct:
-                self.app.push_screen(
-                    ActivateSubscriptionModal(self.selected_user_acct),
-                    self._refresh_user_table,
-                )
-        elif event.button.id == "btn_cancel_subscription":
-            if self.selected_user_acct:
-                ok, msg = square_service.cancel_square_subscription(self.selected_user_acct)
-                severity = "information" if ok else "error"
-                self.app.notify(msg, severity=severity)
-        elif event.button.id == "btn_poll_subscription":
-            if self.selected_user_acct:
-                ok, msg = square_service.poll_member_subscription(self.selected_user_acct)
-                severity = "information" if ok else "error"
-                self.app.notify(msg, severity=severity)
-
-        # --- POS / MANUAL TRANSACTION ACTIONS ---
-        elif event.button.id == "btn_process_manual_txn":
-            self.process_manual_transaction()
-        elif event.button.id == "btn_record_cash_txn":
-            self.record_cash_transaction()
-        elif event.button.id == "btn_clear_pos_form":
-            self.clear_pos_form()
-        elif event.button.id == "btn_refresh_pos_txns":
-            self.load_pos_transactions()
-        elif event.button.id == "btn_check_pos_status":
-            self.check_pos_terminal_status()
-
-        # --- POS SETTINGS ACTIONS ---
-        elif event.button.id == "btn_save_square_token_sandbox":
-            self.save_square_token("sandbox")
-        elif event.button.id == "btn_save_square_token_production":
-            self.save_square_token("production")
-        elif event.button.id == "btn_save_pos_settings":
-            self.save_pos_settings()
-        elif event.button.id == "btn_pair_terminal":
-            self.pair_terminal()
-        elif event.button.id == "btn_check_pairing":
-            self.check_terminal_pairing()
-
-        # --- PRODUCT TIER ACTIONS ---
-        elif event.button.id == "btn_add_mem_tier":
-            self._add_membership_tier()
-        elif event.button.id == "btn_delete_mem_tier":
-            self._delete_membership_tier()
-        elif event.button.id == "btn_add_dp_tier":
-            self._add_daypass_tier()
-        elif event.button.id == "btn_delete_dp_tier":
-            self._delete_daypass_tier()
 
     def action_staff_user_search(self):
         query = self.query_one("#staff_user_search_input").value.strip()
@@ -2284,393 +1502,6 @@ class Dashboard(Screen):
         except Exception as e:
             self.app.notify(f"Export Failed: {str(e)}", severity="error")
 
-    @staticmethod
-    def _parse_non_neg_int(val: str, label: str) -> int:
-        """Parses a non-negative integer or raises ValueError with a human-readable message."""
-        try:
-            n = int(val)
-            if n < 0:
-                raise ValueError()
-            return n
-        except ValueError:
-            raise ValueError(f"{label} must be a whole number of zero or greater.")
-
-    def save_settings_general(self):
-        """Validates and persists General settings, applying changes live where possible."""
-        try:
-            logout_minutes_str = self.query_one("#setting_logout_minutes").value.strip()
-
-            try:
-                logout_minutes = int(logout_minutes_str)
-                if logout_minutes < 1:
-                    raise ValueError()
-            except ValueError:
-                self.app.notify(
-                    "Auto-Logout Timeout must be a positive whole number.",
-                    severity="error",
-                )
-                return
-
-            services.set_setting("logout_timeout_minutes", str(logout_minutes))
-
-            self.AUTO_LOGOUT_SECONDS = logout_minutes * 60
-            self.reset_activity()
-            self.app.notify("General settings saved.")
-        except Exception as e:
-            self.app.notify(f"Error saving settings: {str(e)}", severity="error")
-
-    def save_settings_operations(self):
-        """Validates and persists Space Operations settings."""
-        try:
-            grace_period = self._parse_non_neg_int(
-                self.query_one("#setting_grace_period").value.strip(),
-                "Membership Grace Period",
-            )
-            daypass_cost = self._parse_non_neg_int(
-                self.query_one("#setting_daypass_cost").value.strip(), "Day Pass Cost"
-            )
-            max_signins = self._parse_non_neg_int(
-                self.query_one("#setting_max_signins").value.strip(),
-                "Max Concurrent Sign-Ins",
-            )
-            backup_retention = self._parse_non_neg_int(
-                self.query_one("#setting_backup_retention").value.strip(),
-                "Backup Retention",
-            )
-
-            services.set_setting("membership_grace_period_days", str(grace_period))
-            services.set_setting("day_pass_cost_credits", str(daypass_cost))
-            services.set_setting("max_concurrent_signins", str(max_signins))
-            services.set_setting("backup_retention_days", str(backup_retention))
-            self.app.notify("Operations settings saved.")
-        except ValueError as e:
-            self.app.notify(str(e), severity="error")
-        except Exception as e:
-            self.app.notify(f"Error saving settings: {str(e)}", severity="error")
-
-    def save_settings_branding(self):
-        """Validates and persists Branding and Reporting settings."""
-        try:
-            hackspace_name = self.query_one("#setting_hackspace_name").value.strip()
-            tag_name = self.query_one("#setting_tag_name").value.strip()
-            app_name = self.query_one("#setting_app_name").value.strip()
-            ascii_logo = self.query_one("#setting_ascii_logo", TextArea).text
-            currency_name = self.query_one("#setting_currency_name").value.strip()
-            default_export = (
-                self.query_one("#setting_default_export", Select).value or "csv"
-            )
-            report_header = self.query_one("#setting_report_header").value.strip()
-            staff_email = self.query_one("#setting_staff_email").value.strip()
-
-            if not hackspace_name:
-                self.app.notify("Hackspace Name cannot be empty.", severity="error")
-                return
-            if not tag_name:
-                self.app.notify("Tag Name cannot be empty.", severity="error")
-                return
-            if not currency_name:
-                self.app.notify("Currency Name cannot be empty.", severity="error")
-                return
-            if default_export not in ("csv", "pdf"):
-                self.app.notify(
-                    "Default Export Format must be csv or pdf.", severity="error"
-                )
-                return
-            if staff_email:
-                try:
-                    from email_validator import validate_email
-
-                    validate_email(staff_email, check_deliverability=False)
-                except Exception:
-                    self.app.notify(
-                        "Staff Email must be a valid email address or left blank.",
-                        severity="error",
-                    )
-                    return
-
-            services.set_setting("hackspace_name", hackspace_name)
-            services.set_setting("tag_name", tag_name)
-            services.set_setting("app_name", app_name)
-            services.set_setting("ascii_logo", ascii_logo)
-            services.set_setting("app_currency_name", currency_name)
-            services.set_setting("default_export_format", default_export)
-            services.set_setting("report_header_text", report_header)
-            services.set_setting("staff_email", staff_email)
-            self.app.title = hackspace_name
-            self.update_signin_button()
-            self.app.notify("Branding settings saved.")
-        except Exception as e:
-            self.app.notify(f"Error saving settings: {str(e)}", severity="error")
-
-    def save_settings_security(self):
-        """Validates and persists Security settings."""
-        try:
-            min_pwd_len_str = self.query_one("#setting_min_pwd_len").value.strip()
-            login_limit_str = self.query_one("#setting_login_limit").value.strip()
-            sql_console_enabled = self.query_one("#setting_sql_console", Checkbox).value
-
-            try:
-                min_pwd_len = int(min_pwd_len_str)
-                if min_pwd_len < 1:
-                    raise ValueError()
-            except ValueError:
-                self.app.notify(
-                    "Minimum Password Length must be at least 1.", severity="error"
-                )
-                return
-
-            login_limit = self._parse_non_neg_int(login_limit_str, "Max Login Attempts")
-
-            services.set_setting("min_password_length", str(min_pwd_len))
-            services.set_setting("login_attempt_limit", str(login_limit))
-            services.set_setting(
-                "sql_console_enabled", "true" if sql_console_enabled else "false"
-            )
-            self.app.notify(
-                "Security settings saved. SQL Console changes take effect on next login."
-            )
-        except ValueError as e:
-            self.app.notify(str(e), severity="error")
-        except Exception as e:
-            self.app.notify(f"Error saving settings: {str(e)}", severity="error")
-
-    def save_api_key(self):
-        """
-        Persists the API key as a sensitive setting. If a key was already stored,
-        the new value overwrites it. The input is cleared after saving so the
-        raw value is never left visible on screen.
-        """
-        key_input = self.query_one("#setting_resend_api_key_input", Input)
-        new_key = key_input.value.strip()
-        if not new_key:
-            self.app.notify("API key cannot be empty.", severity="warning")
-            return
-        services.set_sensitive_setting("resend_api_key", new_key)
-        key_input.value = ""
-        key_input.placeholder = "Key configured - paste new key to replace"
-        self.app.notify("API key saved.")
-
-    def save_settings_email(self):
-        """Validates and persists Email and Notifications settings."""
-        try:
-            from_email = self.query_one("#setting_from_email", Input).value.strip()
-            to_email = self.query_one("#setting_to_email", Input).value.strip()
-            send_time = self.query_one("#setting_report_send_time", Input).value.strip()
-            enabled = self.query_one("#setting_email_reports_enabled", Checkbox).value
-            receipts_enabled = self.query_one("#setting_email_receipts_enabled", Checkbox).value
-
-            if to_email:
-                try:
-                    from email_validator import validate_email
-
-                    validate_email(to_email, check_deliverability=False)
-                except Exception:
-                    self.app.notify(
-                        "Report To must be a valid email address.", severity="error"
-                    )
-                    return
-
-            if from_email:
-                try:
-                    from email_validator import validate_email
-
-                    validate_email(from_email, check_deliverability=False)
-                except Exception:
-                    self.app.notify(
-                        "From Email must be a valid email address.", severity="error"
-                    )
-                    return
-
-            # Validate HH:MM format before saving
-            try:
-                from datetime import datetime as _dt
-
-                _dt.strptime(send_time, "%H:%M")
-            except ValueError:
-                self.app.notify(
-                    "Send Time must be in 24-hour HH:MM format, e.g. 07:00.",
-                    severity="error",
-                )
-                return
-
-            services.set_setting("report_from_email", from_email)
-            services.set_setting("report_to_email", to_email)
-            services.set_setting("report_send_time", send_time)
-            services.set_setting(
-                "email_reports_enabled", "true" if enabled else "false"
-            )
-            services.set_setting(
-                "email_receipts_enabled", "true" if receipts_enabled else "false"
-            )
-            self.app.notify("Email settings saved.")
-        except Exception as e:
-            self.app.notify(f"Error saving email settings: {str(e)}", severity="error")
-
-    def save_subscription_settings(self):
-        """Persists the Square subscription plan variation ID and timezone to AppSettings."""
-        try:
-            plan_id = self.query_one("#setting_subscription_plan_id", Input).value.strip()
-            timezone = self.query_one("#setting_subscription_timezone", Input).value.strip()
-            services.set_setting("square_subscription_plan_variation_id", plan_id)
-            services.set_setting(
-                "square_subscription_timezone",
-                timezone or "America/Toronto",
-            )
-            self.app.notify("Subscription settings saved.")
-        except Exception as e:
-            self.app.notify(f"Error saving subscription settings: {str(e)}", severity="error")
-
-    def poll_all_subscriptions(self):
-        """Runs a manual status poll for all members with a Square subscription on file."""
-        try:
-            polled, errors = square_service.poll_all_active_subscriptions()
-            msg = f"Poll complete: {polled} updated, {errors} errors."
-            self.query_one("#lbl_poll_result", Label).update(msg)
-            severity = "warning" if errors else "information"
-            self.app.notify(msg, severity=severity)
-        except Exception as e:
-            self.app.notify(f"Poll failed: {str(e)}", severity="error")
-
-    def send_test_email(self):
-        """Saves current email settings then sends a test report for immediate feedback."""
-        self.save_settings_email()
-        from core.email_service import send_daily_report
-
-        try:
-            sent = send_daily_report()
-            if sent:
-                self.app.notify("Test email sent successfully.")
-            else:
-                self.app.notify(
-                    "Email not sent: reports disabled or required settings missing.",
-                    severity="warning",
-                )
-        except Exception as exc:
-            self.app.notify(f"Email error: {exc}", severity="error")
-
-    # ---------------------------------------------------------------------------
-    # Product Tier methods
-    # ---------------------------------------------------------------------------
-
-    def load_product_tiers(self):
-        """
-        Clears and repopulates the membership and day pass tier tables from the
-        database. Called on mount and after any add or delete operation.
-        """
-        mem_table = self.query_one("#tbl_mem_tiers", DataTable)
-        mem_table.clear()
-        for tier in services.get_product_tiers("membership"):
-            mem_table.add_row(
-                str(tier.id),
-                tier.name,
-                f"${tier.price:.2f}",
-                str(tier.duration_days) if tier.duration_days is not None else "",
-                f"${tier.consumables_credits:.2f}" if tier.consumables_credits else "",
-                tier.description or "",
-                key=str(tier.id),
-            )
-
-        dp_table = self.query_one("#tbl_dp_tiers", DataTable)
-        dp_table.clear()
-        for tier in services.get_product_tiers("daypass"):
-            dp_table.add_row(
-                str(tier.id),
-                tier.name,
-                f"${tier.price:.2f}",
-                tier.description or "",
-                key=str(tier.id),
-            )
-
-    def _add_membership_tier(self):
-        """Validates form inputs and saves a new membership tier to the database."""
-        name = self.query_one("#tier_mem_name", Input).value.strip()
-        price_str = self.query_one("#tier_mem_price", Input).value.strip()
-        duration_str = self.query_one("#tier_mem_duration", Input).value.strip()
-        credits_str = self.query_one("#tier_mem_credits", Input).value.strip()
-        description = self.query_one("#tier_mem_description", Input).value.strip() or None
-
-        if not name:
-            self.app.notify("Tier name is required.", severity="error")
-            return
-        try:
-            price = float(price_str) if price_str else 0.0
-            duration_days = int(duration_str) if duration_str else None
-            consumables_credits = float(credits_str) if credits_str else None
-        except ValueError:
-            self.app.notify("Invalid price, duration, or credits value.", severity="error")
-            return
-
-        services.save_product_tier(
-            name=name,
-            tier_type="membership",
-            price=price,
-            duration_days=duration_days,
-            consumables_credits=consumables_credits,
-            description=description,
-        )
-        self.app.notify(f"Membership tier '{name}' added.")
-        self.query_one("#tier_mem_name", Input).value = ""
-        self.query_one("#tier_mem_price", Input).value = ""
-        self.query_one("#tier_mem_duration", Input).value = ""
-        self.query_one("#tier_mem_credits", Input).value = ""
-        self.query_one("#tier_mem_description", Input).value = ""
-        self.load_product_tiers()
-
-    def _delete_membership_tier(self):
-        """Deletes the currently selected membership tier row."""
-        if self.selected_mem_tier_id is None:
-            self.app.notify("Select a tier row first.", severity="warning")
-            return
-        deleted = services.delete_product_tier(self.selected_mem_tier_id)
-        if deleted:
-            self.app.notify("Membership tier deleted.")
-            self.selected_mem_tier_id = None
-        else:
-            self.app.notify("Tier not found.", severity="error")
-        self.load_product_tiers()
-
-    def _add_daypass_tier(self):
-        """Validates form inputs and saves a new day pass tier to the database."""
-        name = self.query_one("#tier_dp_name", Input).value.strip()
-        price_str = self.query_one("#tier_dp_price", Input).value.strip()
-        description = self.query_one("#tier_dp_description", Input).value.strip() or None
-
-        if not name:
-            self.app.notify("Tier name is required.", severity="error")
-            return
-        try:
-            price = float(price_str) if price_str else 0.0
-        except ValueError:
-            self.app.notify("Invalid price value.", severity="error")
-            return
-
-        services.save_product_tier(
-            name=name,
-            tier_type="daypass",
-            price=price,
-            duration_days=None,
-            consumables_credits=None,
-            description=description,
-        )
-        self.app.notify(f"Day pass tier '{name}' added.")
-        self.query_one("#tier_dp_name", Input).value = ""
-        self.query_one("#tier_dp_price", Input).value = ""
-        self.query_one("#tier_dp_description", Input).value = ""
-        self.load_product_tiers()
-
-    def _delete_daypass_tier(self):
-        """Deletes the currently selected day pass tier row."""
-        if self.selected_dp_tier_id is None:
-            self.app.notify("Select a tier row first.", severity="warning")
-            return
-        deleted = services.delete_product_tier(self.selected_dp_tier_id)
-        if deleted:
-            self.app.notify("Day pass tier deleted.")
-            self.selected_dp_tier_id = None
-        else:
-            self.app.notify("Tier not found.", severity="error")
-        self.load_product_tiers()
-
     # ---------------------------------------------------------------------------
     # POS / Manual Transaction methods
     # ---------------------------------------------------------------------------
@@ -2762,7 +1593,7 @@ class Dashboard(Screen):
         if txn:
             # Only send a receipt when a real payment was submitted to Square.
             # is_local=True means Square was disabled and nothing was actually
-            # charged — the record is an audit placeholder, not a payment confirmation.
+            # charged -- the record is an audit placeholder, not a payment confirmation.
             if ok and not txn.is_local and txn.customer_email:
                 try:
                     hackspace_name = services.get_setting("hackspace_name", "Nucleus")
@@ -2855,11 +1686,16 @@ class Dashboard(Screen):
             "pos_customer_email",
             "pos_customer_phone",
             "pos_description",
+            "pos_customer_search_input",
         ):
             try:
                 self.query_one(f"#{field_id}", Input).value = ""
             except Exception:
                 pass
+        try:
+            self.query_one("#pos_customer_search_table", DataTable).clear()
+        except Exception:
+            pass
         self.clear_cart()
 
     def check_pos_terminal_status(self):
@@ -2875,113 +1711,6 @@ class Dashboard(Screen):
         self.app.notify(message, severity=severity)
         if ok:
             self.load_pos_transactions()
-
-    # ---------------------------------------------------------------------------
-    # POS settings save methods
-    # ---------------------------------------------------------------------------
-
-    def save_square_token(self, environment: str):
-        """
-        Persists the Square access token for the given environment ("sandbox" or
-        "production") as a write-only credential. The input is cleared after saving
-        so the raw value is never left visible on screen. The other environment's
-        token is unaffected, so operators can switch freely without re-entering keys.
-        """
-        input_id = (
-            "#setting_square_token_production"
-            if environment == "production"
-            else "#setting_square_token_sandbox"
-        )
-        token_input = self.query_one(input_id, Input)
-        new_token = token_input.value.strip()
-        if not new_token:
-            self.app.notify("Access token cannot be empty.", severity="warning")
-            return
-        square_service.save_pos_access_token(new_token, environment)
-        token_input.value = ""
-        token_input.placeholder = (
-            "Production token configured - paste to replace"
-            if environment == "production"
-            else "Sandbox token configured - paste to replace"
-        )
-        self.app.notify(f"Square {environment} token saved.")
-
-    def save_pos_settings(self):
-        """Validates and persists Point of Sale configuration settings."""
-        try:
-            enabled = self.query_one("#setting_square_enabled", Checkbox).value
-            environment = (
-                self.query_one("#setting_square_env", Select).value or "sandbox"
-            )
-            location_id = self.query_one(
-                "#setting_square_location_id", Input
-            ).value.strip()
-            device_id = self.query_one("#setting_square_device_id", Input).value.strip()
-            currency = self.query_one("#setting_square_currency", Select).value or "CAD"
-
-            if environment not in ("sandbox", "production"):
-                self.app.notify(
-                    "Environment must be sandbox or production.", severity="error"
-                )
-                return
-
-            square_service.save_pos_config(
-                enabled=enabled,
-                environment=environment,
-                location_id=location_id,
-                device_id=device_id,
-                currency=currency,
-            )
-            self.app.notify("POS settings saved.")
-        except Exception as e:
-            self.app.notify(f"Error saving POS settings: {e}", severity="error")
-
-    def pair_terminal(self):
-        """
-        Requests a Terminal API pairing code from Square and displays it on
-        screen. The operator enters the code on the terminal device to complete
-        pairing. Once entered, Check Pairing Status will fetch the device ID
-        and auto-fill the Device ID field.
-        """
-        ok, result, code_id = square_service.create_device_pairing_code()
-        if not ok:
-            self.app.notify(f"Pairing failed: {result}", severity="error")
-            return
-
-        self._pos_pairing_code_id = code_id
-        try:
-            self.query_one("#lbl_pairing_code").update(
-                f"Pairing code: {result}  (enter this on the terminal now)"
-            )
-            self.query_one("#btn_check_pairing").disabled = False
-        except Exception:
-            pass
-        self.app.notify(f"Pairing code generated: {result}")
-
-    def check_terminal_pairing(self):
-        """
-        Polls Square for the pairing status of the active device code.
-        On success, auto-fills the Device ID field and clears the pairing code display.
-        """
-        if not self._pos_pairing_code_id:
-            self.app.notify("Generate a pairing code first.", severity="warning")
-            return
-
-        paired, message, device_id = square_service.check_device_pairing_status(
-            self._pos_pairing_code_id
-        )
-        self.app.notify(message, severity="information" if paired else "warning")
-
-        if paired and device_id:
-            try:
-                self.query_one("#setting_square_device_id", Input).value = device_id
-                self.query_one("#lbl_pairing_code").update(
-                    f"Paired. Device ID auto-filled: {device_id} — click Save POS Settings to save it."
-                )
-                self.query_one("#btn_check_pairing").disabled = True
-                self._pos_pairing_code_id = None
-            except Exception:
-                pass
 
     def save_user_preferences(self):
         """Reads and persists the current user's My Preferences widgets to UserPreference."""
@@ -2999,7 +1728,7 @@ class Dashboard(Screen):
     def on_visit_type_selected(self, acct: int, visit_type):
         """Callback from SelectVisitTypeModal. Records the sign-in with the chosen visit type."""
         if visit_type is None:
-            return  # User cancelled — do not sign in
+            return  # User cancelled -- do not sign in
         try:
             services.sign_in_user(acct, str(visit_type))
             self.update_signin_button()
@@ -3122,7 +1851,7 @@ class Dashboard(Screen):
             roles_to_fetch.append("community")
 
         # Collect users from each active filter, deduplicating by account number.
-        # "Signed In" is additive — it unions currently signed-in users with the
+        # "Signed In" is additive -- it unions currently signed-in users with the
         # role-filtered results rather than restricting them.
         users_by_acct = {}
         if roles_to_fetch:
@@ -3165,51 +1894,6 @@ class Dashboard(Screen):
         else:
             status_lbl.update(f"Error: {result['error']}")
 
-    # --- Storage Settings ---
-
-    def load_storage_units_settings(self):
-        """Loads all active storage units into the Settings > Storage Units table."""
-        try:
-            table = self.query_one("#tbl_storage_units", DataTable)
-        except Exception:
-            return
-        table.clear()
-        units = services.get_all_storage_units()
-        for u in units:
-            table.add_row(str(u.id), u.unit_number, u.description)
-
-    def create_storage_unit(self):
-        """Reads the settings form inputs and creates a new storage unit."""
-        unit_number = self.query_one("#storage_unit_number", Input).value.strip()
-        description = self.query_one("#storage_unit_description", Input).value.strip()
-        if not unit_number:
-            self.app.notify("Unit number is required.", severity="error")
-            return
-        services.create_storage_unit(unit_number=unit_number, description=description or "Storage Bin")
-        self.app.notify(f"Storage unit {unit_number} created.")
-        # Advance the auto-fill to the next number and reload the table
-        next_num = services.get_next_storage_unit_number()
-        self.query_one("#storage_unit_number", Input).value = next_num
-        self.query_one("#storage_unit_description", Input).value = "Storage Bin"
-        self.load_storage_units_settings()
-
-    def delete_storage_unit(self):
-        """Deletes the selected storage unit if it has no active assignments."""
-        if not self.selected_storage_unit_id:
-            self.app.notify("Select a storage unit first.", severity="warning")
-            return
-        ok = services.delete_storage_unit(self.selected_storage_unit_id)
-        if ok:
-            self.app.notify("Storage unit deleted.")
-            self.selected_storage_unit_id = None
-            self.query_one("#btn_delete_storage_unit").disabled = True
-        else:
-            self.app.notify(
-                "Cannot delete: unit has active assignments. Archive them first.",
-                severity="error",
-            )
-        self.load_storage_units_settings()
-
     # --- Storage Tab ---
 
     def load_storage_assignments(self):
@@ -3243,7 +1927,9 @@ class Dashboard(Screen):
             unit_label = unit.unit_number if unit else str(a.unit_id)
             name = a.assigned_to_name or ""
             total = f"${a.charge_total:.2f}" if a.charge_total is not None else ""
-            archived_at = a.archived_at.strftime("%Y-%m-%d %H:%M") if a.archived_at else ""
+            archived_at = (
+                a.archived_at.strftime("%Y-%m-%d %H:%M") if a.archived_at else ""
+            )
             archived_table.add_row(
                 str(a.id),
                 unit_label,
@@ -3275,6 +1961,36 @@ class Dashboard(Screen):
         if result:
             self.load_storage_assignments()
 
+    def open_storage_view_modal(self):
+        """Opens the read-only view modal for the currently selected active assignment."""
+        if not self.selected_storage_assignment_id:
+            self.app.notify("Select an assignment row first.", severity="warning")
+            return
+        self.app.push_screen(
+            StorageViewModal(assignment_id=self.selected_storage_assignment_id)
+        )
+
+    def open_storage_edit_modal(self):
+        """Opens the edit modal for the currently selected active assignment."""
+        if not self.selected_storage_assignment_id:
+            self.app.notify("Select an assignment row first.", severity="warning")
+            return
+        assignment = services.get_storage_assignment_by_id(
+            self.selected_storage_assignment_id
+        )
+        if not assignment:
+            self.app.notify("Assignment not found.", severity="error")
+            return
+        units = services.get_all_storage_units()
+        self.app.push_screen(
+            StorageEditModal(assignment=assignment, units=units),
+            self._after_storage_edit,
+        )
+
+    def _after_storage_edit(self, result: bool):
+        if result:
+            self.load_storage_assignments()
+
     def archive_storage_assignment(self):
         """Archives the currently selected active assignment."""
         if not self.selected_storage_assignment_id:
@@ -3284,55 +2000,14 @@ class Dashboard(Screen):
         if ok:
             self.app.notify("Storage assignment archived.")
             self.selected_storage_assignment_id = None
+            self.query_one("#btn_storage_view").disabled = True
+            self.query_one("#btn_storage_edit").disabled = True
             self.query_one("#btn_storage_archive").disabled = True
         else:
-            self.app.notify("Could not archive: already archived or not found.", severity="error")
+            self.app.notify(
+                "Could not archive: already archived or not found.", severity="error"
+            )
         self.load_storage_assignments()
-
-    # --- Inventory Settings ---
-
-    def load_inventory_settings(self):
-        """Loads all active inventory items into the Settings > Inventory table."""
-        try:
-            table = self.query_one("#tbl_inventory_items", DataTable)
-        except Exception:
-            return
-        table.clear()
-        for item in services.get_all_inventory_items():
-            table.add_row(str(item.id), item.name, item.description or "", f"${item.price:.2f}")
-
-    def create_inventory_item_action(self):
-        """Reads the settings form and creates a new inventory item."""
-        name = self.query_one("#inv_item_name", Input).value.strip()
-        if not name:
-            self.app.notify("Name is required.", severity="error")
-            return
-        description = self.query_one("#inv_item_description", Input).value.strip() or None
-        try:
-            price = float(self.query_one("#inv_item_price", Input).value or "0")
-        except ValueError:
-            self.app.notify("Enter a valid price.", severity="error")
-            return
-        services.create_inventory_item(name=name, description=description, price=price)
-        self.app.notify(f"Item '{name}' added.")
-        self.query_one("#inv_item_name", Input).value = ""
-        self.query_one("#inv_item_description", Input).value = ""
-        self.query_one("#inv_item_price", Input).value = ""
-        self.load_inventory_settings()
-        # Refresh the available items table in the Purchases tab
-        self._load_inv_available_table()
-
-    def delete_inventory_item_action(self):
-        """Deletes the selected inventory item from settings."""
-        if not self.selected_inventory_item_id:
-            self.app.notify("Select an item first.", severity="warning")
-            return
-        services.delete_inventory_item(self.selected_inventory_item_id)
-        self.app.notify("Item deleted.")
-        self.selected_inventory_item_id = None
-        self.query_one("#btn_delete_inventory_item").disabled = True
-        self.load_inventory_settings()
-        self._load_inv_available_table()
 
     # --- Inventory Cart ---
 
@@ -3344,7 +2019,9 @@ class Dashboard(Screen):
             return
         table.clear()
         for item in services.get_all_inventory_items():
-            table.add_row(str(item.id), item.name, item.description or "", f"${item.price:.2f}")
+            table.add_row(
+                str(item.id), item.name, item.description or "", f"${item.price:.2f}"
+            )
 
     def _rebuild_cart_table(self):
         """
@@ -3389,7 +2066,9 @@ class Dashboard(Screen):
     def add_to_cart(self):
         """Adds the selected available item to the cart, merging qty if already present."""
         if not self._inv_selected_item:
-            self.app.notify("Click an item in the table to select it first.", severity="warning")
+            self.app.notify(
+                "Click an item in the table to select it first.", severity="warning"
+            )
             return
         try:
             qty = float(self.query_one("#inv_qty", Input).value or "1")
@@ -3406,12 +2085,14 @@ class Dashboard(Screen):
                 self._rebuild_cart_table()
                 return
 
-        self._cart.append({
-            "id": self._inv_selected_item["id"],
-            "name": self._inv_selected_item["name"],
-            "qty": qty,
-            "unit_price": self._inv_selected_item["price"],
-        })
+        self._cart.append(
+            {
+                "id": self._inv_selected_item["id"],
+                "name": self._inv_selected_item["name"],
+                "qty": qty,
+                "unit_price": self._inv_selected_item["price"],
+            }
+        )
         self._rebuild_cart_table()
 
     def remove_from_cart(self):
@@ -3419,7 +2100,9 @@ class Dashboard(Screen):
         if self._inv_selected_cart_item_id is None:
             self.app.notify("Select a cart row first.", severity="warning")
             return
-        self._cart = [e for e in self._cart if e["id"] != self._inv_selected_cart_item_id]
+        self._cart = [
+            e for e in self._cart if e["id"] != self._inv_selected_cart_item_id
+        ]
         self._inv_selected_cart_item_id = None
         try:
             self.query_one("#btn_remove_from_cart").disabled = True
@@ -3436,3 +2119,39 @@ class Dashboard(Screen):
         except Exception:
             pass
         self._rebuild_cart_table()
+
+    def add_manual_to_cart(self):
+        """Adds a custom (manual) line item to the cart from the POS form fields."""
+        try:
+            desc = self.query_one("#pos_manual_desc", Input).value.strip()
+            price_str = self.query_one("#pos_manual_price", Input).value.strip()
+        except Exception as e:
+            self.app.notify(f"Form error: {e}", severity="error")
+            return
+
+        if not desc:
+            self.app.notify("Please enter an item name/description.", severity="error")
+            return
+        try:
+            price = float(price_str)
+            if price <= 0:
+                self.app.notify("Price must be greater than zero.", severity="error")
+                return
+        except (ValueError, TypeError):
+            self.app.notify("Please enter a valid price.", severity="error")
+            return
+
+        self._manual_entry_counter += 1
+        self._cart.append(
+            {
+                "id": f"manual_{self._manual_entry_counter}",
+                "name": desc,
+                "qty": 1,
+                "unit_price": price,
+            }
+        )
+        self._rebuild_cart_table()
+
+        # Clear the manual entry fields after adding
+        self.query_one("#pos_manual_desc", Input).value = ""
+        self.query_one("#pos_manual_price", Input).value = ""

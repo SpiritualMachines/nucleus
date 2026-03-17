@@ -137,7 +137,9 @@ def run_migrations():
         _verify_and_add_column(session, "user", "square_customer_id", "VARCHAR")
         _verify_and_add_column(session, "user", "square_subscription_id", "VARCHAR")
         _verify_and_add_column(session, "user", "square_subscription_status", "VARCHAR")
-        _verify_and_add_column(session, "user", "square_subscription_checked_at", "DATETIME")
+        _verify_and_add_column(
+            session, "user", "square_subscription_checked_at", "DATETIME"
+        )
 
         # storageunit and storageassignment tables — new tables for member storage tracking.
         # No column migrations needed for new tables; create_db_and_tables() handles them.

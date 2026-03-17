@@ -8,6 +8,8 @@ is read from the AppSetting table at send time so that admin changes take effect
 without restarting the application.
 """
 
+import base64
+
 import resend
 
 from core.services import (
@@ -145,11 +147,7 @@ def _build_receipt_html(
             f"</tr>"
         )
 
-    table = (
-        f"<table style='{_TABLE_STYLE}'>"
-        f"<tbody>{rows_html}</tbody>"
-        f"</table>"
-    )
+    table = f"<table style='{_TABLE_STYLE}'><tbody>{rows_html}</tbody></table>"
 
     return f"""<!DOCTYPE html>
 <html>
@@ -191,13 +189,16 @@ def send_daily_report() -> bool:
 
     api_key = get_sensitive_setting_value("resend_api_key")
     from_email = get_setting("report_from_email", "onboarding@resend.dev")
-    to_email = get_setting("report_to_email", "")
+    to_email_raw = get_setting("report_to_email", "")
 
     if not api_key:
         print("[Email] Cannot send daily report: API key not configured")
         return False
 
-    if not to_email:
+    # Support comma-separated list of recipient addresses.
+    to_emails = [addr.strip() for addr in to_email_raw.split(",") if addr.strip()]
+
+    if not to_emails:
         print("[Email] Cannot send daily report: recipient email not configured")
         return False
 
@@ -208,13 +209,47 @@ def send_daily_report() -> bool:
 
     params = {
         "from": from_email,
-        "to": [to_email],
+        "to": to_emails,
         "subject": f"Nucleus Makerspace Activity Summary - {data['report_date']}",
         "html": html_body,
     }
 
     resend.Emails.send(params)
-    print(f"[Email] Daily report sent to {to_email}")
+    print(f"[Email] Daily report sent to {', '.join(to_emails)}")
+    return True
+
+
+def send_backup_email(backup_path: str, backup_filename: str, to_email: str) -> bool:
+    """
+    Emails the database backup file as an attachment to the given address.
+    Uses the same Resend API key and from-address as the daily report.
+    Raises on failure so the caller can surface the error as a notification.
+    """
+    api_key = get_sensitive_setting_value("resend_api_key")
+    if not api_key:
+        raise RuntimeError("Resend API key is not configured.")
+
+    from_email = get_setting("report_from_email", "onboarding@resend.dev")
+
+    with open(backup_path, "rb") as f:
+        encoded = base64.b64encode(f.read()).decode("utf-8")
+
+    resend.api_key = api_key
+
+    params = {
+        "from": from_email,
+        "to": [addr.strip() for addr in to_email.split(",") if addr.strip()],
+        "subject": f"Nucleus Database Backup - {backup_filename}",
+        "html": (
+            f"<p>Attached is the automated database backup: "
+            f"<strong>{backup_filename}</strong>.</p>"
+            f"<p>Store this file securely.</p>"
+        ),
+        "attachments": [{"filename": backup_filename, "content": encoded}],
+    }
+
+    resend.Emails.send(params)
+    print(f"[Email] Backup {backup_filename} sent to {to_email}")
     return True
 
 

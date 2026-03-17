@@ -208,7 +208,9 @@ class ProductTier(SQLModel, table=True):
     tier_type: str  # "membership" or "daypass"
     price: float = Field(default=0.0)
     duration_days: Optional[int] = Field(default=None)  # membership only
-    consumables_credits: Optional[float] = Field(default=None)  # bonus credits on activation
+    consumables_credits: Optional[float] = Field(
+        default=None
+    )  # bonus credits on activation
     description: Optional[str] = Field(default=None, sa_column=Column(Text))
     is_active: bool = Field(default=True)
 
@@ -266,7 +268,9 @@ class StorageAssignment(SQLModel, table=True):
 
     # Charges — all null when charges_owed is False
     charges_owed: bool = Field(default=False)
-    charge_type: Optional[str] = Field(default=None)  # e.g. "Filament", "Large Format Printer"
+    charge_type: Optional[str] = Field(
+        default=None
+    )  # e.g. "Filament", "Large Format Printer"
     charge_unit_count: Optional[float] = Field(default=None)
     charge_cost_per_unit: Optional[float] = Field(default=None)
     charge_total: Optional[float] = Field(default=None)  # Pre-computed total

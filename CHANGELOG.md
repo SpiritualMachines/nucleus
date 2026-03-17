@@ -5,6 +5,55 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.9.76] - 2026-03-17
+
+## Fixed 
+
+#### Daily Reports to Multiple Email Addresses
+- Fixed a bug where the validation through an error when multiple email addresses were entered.
+
+
+### Added
+
+#### USER_MANUAL.md
+- Added a detailed user manual to make it easier for non-technical individuals to set up the app.
+
+#### UI/UX
+- Changes to user interface to improve user experience. 
+
+
+___
+
+## [0.9.75] - 2026-03-17
+
+### Added
+
+#### Daily Reports to Multiple Email Addresses
+- Now able to enter multiple email addresses seperated by a comma to send daily reports to
+
+#### Major Refactor
+- Major code refactor for reliability and readability
+
+
+___
+
+## [0.9.74] - 2026-03-16
+
+### Added
+
+#### View/Edit Storage Entries
+- Can now view and edit storage entries by 2 new buttons added
+
+#### Backup Chanages and Emailing Backups
+- Can now set backup time and frequency
+- Can now enable email backups of database
+
+#### Code Refactoring
+- Split some script files for readability
+
+
+___
+
 ## [0.9.73] - 2026-03-12
 
 ### Added
