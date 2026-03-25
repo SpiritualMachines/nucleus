@@ -6,7 +6,7 @@ SETTINGS_FILE = os.path.join("theme", "settings.txt")
 class Settings:
     def __init__(self):
         self.APP_NAME = "Nucleus Daemon"
-        self.APP_VERSION = "v0.9.76"
+        self.APP_VERSION = "v0.9.77"
         self.HACKSPACE_NAME = "Hackspace"
         self.TAG_NAME = "Makerspace"
         self.ASCII_LOGO = ""
