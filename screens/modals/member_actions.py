@@ -106,13 +106,17 @@ class StaffEditUserScreen(ModalScreen):
             with VerticalScroll(classes="splash-content"):
                 yield Label("System Role:", classes="subtitle")
 
-                # --- FIX: Handle raw string role for Select default value ---
+                # Safely extract the role string, falling back to the raw DB
+                # value when the enum wrapper is missing (legacy accounts).
                 current_role_val = (
                     user.role.value if hasattr(user.role, "value") else str(user.role)
                 )
+                valid_roles = [r.value for r in models.UserRole]
+                if current_role_val not in valid_roles:
+                    current_role_val = models.UserRole.COMMUNITY.value
 
                 yield Select.from_values(
-                    [r.value for r in models.UserRole],
+                    valid_roles,
                     value=current_role_val,
                     id="edit_role",
                 )

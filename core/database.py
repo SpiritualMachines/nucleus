@@ -57,6 +57,49 @@ def _verify_and_drop_column(session: Session, table: str, column: str):
         session.commit()
 
 
+def _normalise_user_roles(session: Session):
+    """
+    Fixes any user rows whose role value does not match a current UserRole enum
+    member. This can happen when roles are renamed or removed between versions,
+    or when SQLAlchemy stored the enum NAME ('ADMIN') instead of its value ('admin').
+
+    Case-insensitive matches are corrected to the canonical lowercase value.
+    Truly unrecognised values are set to 'community' as the safest default.
+    """
+    inspector = inspect(engine)
+    if "user" not in inspector.get_table_names():
+        return
+
+    valid_roles = {"admin", "staff", "member", "community"}
+
+    # Find rows where the role is NULL or not already a valid lowercase value.
+    bad_rows = session.execute(
+        text(
+            "SELECT account_number, role FROM user "
+            "WHERE role NOT IN (:r1, :r2, :r3, :r4) OR role IS NULL"
+        ),
+        {"r1": "admin", "r2": "staff", "r3": "member", "r4": "community"},
+    ).fetchall()
+
+    if bad_rows:
+        for row in bad_rows:
+            # Preserve the role if it is just a case mismatch (e.g. "Admin", "STAFF")
+            lowered = row.role.lower().strip() if row.role else None
+            new_role = lowered if lowered in valid_roles else "community"
+
+            session.execute(
+                text(
+                    "UPDATE user SET role = :new_role "
+                    "WHERE account_number = :acct"
+                ),
+                {"new_role": new_role, "acct": row.account_number},
+            )
+        session.commit()
+        print(
+            f"[Migration] Normalised {len(bad_rows)} user(s) with non-standard role values"
+        )
+
+
 def run_migrations():
     """
     Applies all incremental schema changes to an existing database.
@@ -149,3 +192,9 @@ def run_migrations():
 
         # inventoryitem table — new table for POS transaction cart items.
         # No column migrations needed; create_db_and_tables() creates the table.
+
+        # Data migration: normalise any legacy role values that are not in the
+        # current UserRole enum (admin, staff, member, community). Accounts with
+        # unrecognised roles are set to "community" so the UI does not crash when
+        # staff try to edit them.
+        _normalise_user_roles(session)

@@ -253,6 +253,115 @@ def send_backup_email(backup_path: str, backup_filename: str, to_email: str) -> 
     return True
 
 
+def send_error_notification_email(
+    error_message: str,
+    traceback_info: str = "",
+) -> bool:
+    """
+    Emails an error notification to the configured staff address when a
+    severity='error' notification is triggered in the application.
+
+    Reuses the existing Resend API key and from-address settings so no
+    additional transport configuration is required. Returns True on successful
+    delivery. Returns False when the feature is disabled, no recipient address
+    is configured, or the API key is missing.
+
+    Parameters:
+        error_message  -- The notification message shown to the user.
+        traceback_info -- Python traceback string captured at notification time,
+                          included only when a live exception context is present.
+    """
+    if get_setting("error_email_enabled", "false").lower() != "true":
+        return False
+
+    error_email_to_raw = get_setting("error_email_to", "").strip()
+    if not error_email_to_raw:
+        print("[Email] Error notification not sent: no recipient configured")
+        return False
+
+    api_key = get_sensitive_setting_value("resend_api_key")
+    if not api_key:
+        print("[Email] Error notification not sent: Resend API key not configured")
+        return False
+
+    hackspace_name = get_setting("hackspace_name", "Nucleus")
+    from_email = get_setting("report_from_email", "onboarding@resend.dev")
+
+    to_emails = [
+        addr.strip() for addr in error_email_to_raw.split(",") if addr.strip()
+    ]
+    if not to_emails:
+        return False
+
+    from datetime import datetime as _dt
+
+    timestamp = _dt.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    resend.api_key = api_key
+    html_body = _build_error_notification_html(
+        hackspace_name=hackspace_name,
+        error_message=error_message,
+        traceback_info=traceback_info,
+        timestamp=timestamp,
+    )
+
+    params = {
+        "from": from_email,
+        "to": to_emails,
+        "subject": f"{hackspace_name} - Error Notification [{timestamp}]",
+        "html": html_body,
+    }
+
+    resend.Emails.send(params)
+    print(f"[Email] Error notification sent to {', '.join(to_emails)}")
+    return True
+
+
+def _build_error_notification_html(
+    hackspace_name: str,
+    error_message: str,
+    traceback_info: str,
+    timestamp: str,
+) -> str:
+    """Renders a simple error notification as an HTML email body."""
+    divider = "<div style='border-top: 1px solid #ddd; margin: 20px 0;'></div>"
+
+    # Only include a traceback section when a real exception context was captured.
+    # traceback.format_exc() returns "NoneType: None\n" outside an exception handler.
+    has_traceback = traceback_info and traceback_info.strip() not in (
+        "",
+        "NoneType: None",
+    )
+
+    traceback_section = ""
+    if has_traceback:
+        traceback_section = f"""
+  {divider}
+  <h3 style="border-bottom: 2px solid #333; padding-bottom: 4px;">Traceback</h3>
+  <pre style="background: #f4f4f4; padding: 12px; border: 1px solid #ccc; overflow-x: auto; font-size: 0.85em; white-space: pre-wrap;">{traceback_info}</pre>
+"""
+
+    return f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family: sans-serif; color: #333; max-width: 800px; margin: auto; padding: 20px;">
+  <h2 style="margin-bottom: 0; color: #c0392b;">{hackspace_name} - Error Notification</h2>
+  <p style="margin-top: 4px; color: #666;">
+    <strong>Timestamp:</strong> {timestamp}
+  </p>
+  {divider}
+  <h3 style="border-bottom: 2px solid #333; padding-bottom: 4px;">Error Message</h3>
+  <p style="background: #fff0f0; padding: 12px; border-left: 4px solid #c0392b; font-weight: bold; margin: 0;">{error_message}</p>
+  {traceback_section}
+  {divider}
+  <p style="font-size: 0.8em; color: #999;">
+    Sent automatically by Nucleus when an error notification is triggered in the application.
+    To disable, turn off error email notifications in Settings.
+  </p>
+</body>
+</html>"""
+
+
 def _build_html(data: dict) -> str:
     """
     Renders the report data into two HTML tables:
@@ -276,7 +385,7 @@ def _build_html(data: dict) -> str:
         ("Sign-ins", "sign_ins"),
         ("Volunteers", "volunteers"),
         ("Day Passes", "day_passes"),
-        ("Consumables Transactions", "transactions"),
+        ("Credits Transactions", "transactions"),
         ("Community Contacts", "community_contacts"),
     ]
 

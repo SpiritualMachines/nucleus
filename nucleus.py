@@ -26,6 +26,54 @@ class HackspaceApp(App):
     # FIX: Use Optional[] instead of | for Python < 3.10 compatibility
     current_user: Optional[models.User] = None
 
+    def notify(
+        self,
+        message: str,
+        *,
+        title: str = "",
+        severity: str = "information",
+        timeout: float = None,
+    ) -> None:
+        """
+        Extends the Textual notify method to optionally send an email to staff
+        whenever a severity='error' notification is triggered. The email is
+        dispatched in a background daemon thread so it never blocks the UI.
+        The feature is gated by the error_email_enabled setting and requires
+        the Resend API key and error_email_to address to be configured.
+        """
+        if timeout is not None:
+            super().notify(message, title=title, severity=severity, timeout=timeout)
+        else:
+            super().notify(message, title=title, severity=severity)
+
+        if severity == "error":
+            import traceback as _tb
+
+            tb = _tb.format_exc()
+            threading.Thread(
+                target=self._send_error_notification_email,
+                args=(message, tb),
+                daemon=True,
+            ).start()
+
+    def _send_error_notification_email(
+        self, error_message: str, traceback_info: str = ""
+    ) -> None:
+        """
+        Background thread target that emails an error notification if the
+        feature is enabled and all required settings are configured.
+        Never calls self.notify() to avoid recursion — logs to stdout only.
+        """
+        try:
+            from core.email_service import send_error_notification_email
+
+            send_error_notification_email(
+                error_message=error_message,
+                traceback_info=traceback_info,
+            )
+        except Exception as e:
+            print(f"[Error Email] Failed to send error notification email: {e}")
+
     def on_mount(self):
         # 1. FORCE THE THEME PROGRAMMATICALLY
         self.theme = "nord"
@@ -104,15 +152,29 @@ class HackspaceApp(App):
         would expire the moment the system resumed, causing the email to fire at
         whatever time the machine woke up rather than the configured time.
 
-        A sent_date tracker ensures exactly one report per calendar day regardless
-        of how many times the clock crosses the configured minute boundary.
+        The last-sent date is persisted in the database so that restarting the app
+        does not cause a duplicate send on the same calendar day.
         """
-        sent_date = None
-
         while True:
             time.sleep(60)
             now = datetime.now()
             today = now.date()
+
+            # Re-read the last-sent date from the DB on every poll so that a
+            # restart (or a manual send from the Settings screen) is always
+            # recognised. Reading inside the loop also avoids a race condition
+            # with create_db_and_tables() on the very first launch.
+            sent_date = None
+            try:
+                last_sent_str = services.get_setting(
+                    "report_last_sent_date", ""
+                )
+                if last_sent_str:
+                    sent_date = datetime.strptime(
+                        last_sent_str, "%Y-%m-%d"
+                    ).date()
+            except Exception:
+                sent_date = None
 
             # Re-read the setting on every poll so changes take effect immediately
             send_time_str = services.get_setting("report_send_time", "07:00")
@@ -141,6 +203,7 @@ class HackspaceApp(App):
                 )
                 self.send_daily_email_report()
                 sent_date = today
+                services.set_setting("report_last_sent_date", str(today))
 
     def run_backup_scheduler(self):
         """

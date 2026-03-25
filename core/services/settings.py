@@ -84,7 +84,7 @@ def initialize_default_settings(seed_values: dict = None):
         "hackspace_name": "Hackspace",
         "tag_name": "Makerspace",
         "app_name": "Nucleus Daemon",
-        "app_version": "v0.9.76",
+        "app_version": "v0.9.77",
         "ascii_logo": "",
         "logout_timeout_minutes": "10",
         # Space operations
@@ -112,6 +112,10 @@ def initialize_default_settings(seed_values: dict = None):
         "email_reports_enabled": "false",
         # 24-hour HH:MM time at which the daily report email is dispatched
         "report_send_time": "07:00",
+        # Error email notifications — sends an email whenever a severity=error
+        # notification is triggered in the application
+        "error_email_enabled": "false",
+        "error_email_to": "",
     }
     if seed_values:
         defaults.update(seed_values)

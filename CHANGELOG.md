@@ -5,12 +5,27 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.9.77] - 2026-03-24
+
+### Added
+
+#### Error Email Notifications
+- Added a setting to email staff whenever a severity error notification is triggered in the application. When enabled, the error message and traceback context (if available) are sent to the configured address via the existing Resend integration. Configured in Settings under Email and Notifications with a toggle and a recipient email field.
+
+___
+
 ## [0.9.76] - 2026-03-17
 
-## Fixed 
+## Fixed
 
 #### Daily Reports to Multiple Email Addresses
 - Fixed a bug where the validation through an error when multiple email addresses were entered.
+
+#### Daily Report Duplicate Send on Restart
+- Fixed a bug where the daily report email would resend on app restart even if it had already been sent that day. The last-sent date is now persisted in the database.
+
+#### Crash When Editing User With Legacy Role
+- Fixed a crash in Staff Tools when editing a user whose role did not match the current role options. Legacy role values are now automatically normalised during database migration.
 
 
 ### Added

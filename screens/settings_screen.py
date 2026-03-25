@@ -701,6 +701,24 @@ class SettingsScreen(Widget):
                         == "true",
                     )
 
+                    yield Checkbox(
+                        "Email error notifications to staff",
+                        id="setting_error_email_enabled",
+                        value=services.get_setting(
+                            "error_email_enabled", "false"
+                        ).lower()
+                        == "true",
+                    )
+
+                    yield Label(
+                        "Send Error Notifications To (comma-separated email addresses):"
+                    )
+                    yield Input(
+                        services.get_setting("error_email_to", ""),
+                        placeholder="e.g. admin@yourhackerspace.org",
+                        id="setting_error_email_to",
+                    )
+
                     with Horizontal():
                         yield Button(
                             "Save Email Settings",
@@ -1088,6 +1106,12 @@ class SettingsScreen(Widget):
             receipts_enabled = self.query_one(
                 "#setting_email_receipts_enabled", Checkbox
             ).value
+            error_email_enabled = self.query_one(
+                "#setting_error_email_enabled", Checkbox
+            ).value
+            error_email_to = self.query_one(
+                "#setting_error_email_to", Input
+            ).value.strip()
 
             if to_email:
                 from email_validator import validate_email
@@ -1136,6 +1160,28 @@ class SettingsScreen(Widget):
             services.set_setting(
                 "email_receipts_enabled", "true" if receipts_enabled else "false"
             )
+
+            # Validate error notification email addresses before saving
+            if error_email_to:
+                from email_validator import validate_email
+
+                for addr in error_email_to.split(","):
+                    addr = addr.strip()
+                    if not addr:
+                        continue
+                    try:
+                        validate_email(addr, check_deliverability=False)
+                    except Exception:
+                        self.app.notify(
+                            f"Invalid error notification address: {addr}",
+                            severity="error",
+                        )
+                        return
+
+            services.set_setting(
+                "error_email_enabled", "true" if error_email_enabled else "false"
+            )
+            services.set_setting("error_email_to", error_email_to)
             self.app.notify("Email settings saved.")
         except Exception as e:
             self.app.notify(f"Error saving email settings: {str(e)}", severity="error")
