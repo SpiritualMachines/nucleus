@@ -1,5 +1,6 @@
 """Reporting functions for period traction, people export, and daily email."""
 
+import calendar
 from collections import defaultdict
 from datetime import datetime, timedelta
 
@@ -25,6 +26,8 @@ __all__ = [
     "get_period_traction_report_data",
     "get_everything_people_data",
     "build_daily_report_data",
+    "build_monthly_transaction_report_data",
+    "build_period_transaction_report_data",
 ]
 
 
@@ -661,4 +664,134 @@ def build_daily_report_data() -> dict:
         "days": days,
         "community_contacts_detail": community_contacts_detail,
         "recent_transactions_detail": recent_transactions_detail,
+    }
+
+
+def build_monthly_transaction_report_data(year: int, month: int) -> dict:
+    """
+    Assembles all transaction data for the given calendar month, split into
+    card (Square Terminal completions) and cash/local categories.
+
+    Returns a plain dict so email_service remains decoupled from the ORM layer.
+
+    Keys returned:
+      hackspace_name      - display name of the space
+      month_label         - human-readable label, e.g. "March 2026"
+      year                - int
+      month               - int (1-12)
+      card_transactions   - list of dicts for square_status == "completed"
+      cash_transactions   - list of dicts for square_status in
+                            ("cash", "cash_square", "local")
+      card_total          - float sum of all card transaction amounts
+      cash_total          - float sum of all cash transaction amounts
+    """
+    first_day = datetime(year, month, 1, 0, 0, 0)
+    last_day_num = calendar.monthrange(year, month)[1]
+    last_day = datetime(year, month, last_day_num, 23, 59, 59)
+
+    card_statuses = ("completed",)
+    cash_statuses = ("cash", "cash_square", "local")
+
+    with Session(engine) as session:
+        all_txns = session.exec(
+            select(SquareTransaction)
+            .where(
+                SquareTransaction.created_at >= first_day,
+                SquareTransaction.created_at <= last_day,
+                or_(
+                    SquareTransaction.square_status.in_(card_statuses),
+                    SquareTransaction.square_status.in_(cash_statuses),
+                ),
+            )
+            .order_by(SquareTransaction.created_at)
+        ).all()
+
+    def _row(t):
+        return {
+            "id": t.id,
+            "date": t.created_at.strftime("%Y-%m-%d %H:%M"),
+            "customer_name": t.customer_name or "",
+            "description": t.description or "",
+            "amount": t.amount,
+            "amount_fmt": f"${t.amount:.2f}",
+            "processed_by": t.processed_by or "",
+        }
+
+    card_rows = [_row(t) for t in all_txns if t.square_status in card_statuses]
+    cash_rows = [_row(t) for t in all_txns if t.square_status in cash_statuses]
+
+    return {
+        "hackspace_name": get_setting("hackspace_name", "Hackspace"),
+        "month_label": datetime(year, month, 1).strftime("%B %Y"),
+        "year": year,
+        "month": month,
+        "card_transactions": card_rows,
+        "cash_transactions": cash_rows,
+        "card_total": sum(r["amount"] for r in card_rows),
+        "cash_total": sum(r["amount"] for r in cash_rows),
+    }
+
+
+def build_period_transaction_report_data(
+    start_date: datetime, end_date: datetime
+) -> dict:
+    """
+    Assembles transaction data for an arbitrary date range, split into card
+    (Square Terminal completions) and cash/local categories. Mirrors the
+    structure of build_monthly_transaction_report_data but accepts explicit
+    start and end datetimes so it can be used for any user-selected period.
+
+    Returns a plain dict so export and email layers remain decoupled from the ORM.
+
+    Keys returned:
+      hackspace_name      - display name of the space
+      period_label        - human-readable range, e.g. "2026-01-01 to 2026-03-31"
+      card_transactions   - list of dicts for square_status == "completed"
+      cash_transactions   - list of dicts for square_status in
+                            ("cash", "cash_square", "local")
+      card_total          - float sum of all card transaction amounts
+      cash_total          - float sum of all cash transaction amounts
+    """
+    card_statuses = ("completed",)
+    cash_statuses = ("cash", "cash_square", "local")
+
+    with Session(engine) as session:
+        all_txns = session.exec(
+            select(SquareTransaction)
+            .where(
+                SquareTransaction.created_at >= start_date,
+                SquareTransaction.created_at <= end_date,
+                or_(
+                    SquareTransaction.square_status.in_(card_statuses),
+                    SquareTransaction.square_status.in_(cash_statuses),
+                ),
+            )
+            .order_by(SquareTransaction.created_at)
+        ).all()
+
+    def _row(t):
+        return {
+            "id": t.id,
+            "date": t.created_at.strftime("%Y-%m-%d %H:%M"),
+            "customer_name": t.customer_name or "",
+            "description": t.description or "",
+            "amount": t.amount,
+            "amount_fmt": f"${t.amount:.2f}",
+            "processed_by": t.processed_by or "",
+        }
+
+    card_rows = [_row(t) for t in all_txns if t.square_status in card_statuses]
+    cash_rows = [_row(t) for t in all_txns if t.square_status in cash_statuses]
+
+    period_label = (
+        f"{start_date.strftime('%Y-%m-%d')} to {end_date.strftime('%Y-%m-%d')}"
+    )
+
+    return {
+        "hackspace_name": get_setting("hackspace_name", "Hackspace"),
+        "period_label": period_label,
+        "card_transactions": card_rows,
+        "cash_transactions": cash_rows,
+        "card_total": sum(r["amount"] for r in card_rows),
+        "cash_total": sum(r["amount"] for r in cash_rows),
     }

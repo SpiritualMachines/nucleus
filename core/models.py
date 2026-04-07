@@ -171,6 +171,15 @@ class SquareTransaction(SQLModel, table=True):
     # True when Square was not used; False when a terminal checkout was attempted
     is_local: bool = Field(default=True)
 
+    # Staff member who processed this transaction at the time of sale
+    processed_by: Optional[str] = Field(default=None)
+
+    # Refund tracking — populated when a refund is issued against this transaction
+    refund_status: Optional[str] = Field(default=None)  # "refunded" or None
+    refund_reason: Optional[str] = Field(default=None, sa_column=Column(Text))
+    refunded_at: Optional[datetime] = Field(default=None)
+    refunded_by: Optional[str] = Field(default=None)
+
 
 class PosConfig(SQLModel, table=True):
     """
@@ -191,6 +200,7 @@ class PosConfig(SQLModel, table=True):
     # clears a stored credential. Neither value is ever shown in the UI after saving.
     square_access_token_sandbox: str = Field(default="")
     square_access_token_production: str = Field(default="")
+    square_push_cash_enabled: bool = Field(default=False)
 
 
 class ProductTier(SQLModel, table=True):

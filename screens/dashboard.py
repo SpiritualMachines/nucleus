@@ -8,6 +8,7 @@ from textual.screen import Screen
 from textual.widgets import (
     Button,
     Checkbox,
+    Collapsible,
     DataTable,
     Footer,
     Header,
@@ -33,6 +34,7 @@ from screens.dashboard_modals import (
     ManageMembershipsModal,
     MemberActionModal,
     PeriodTractionReportModal,
+    PeriodTransactionReportModal,
     PostActionCountdownModal,
     SelectVisitTypeModal,
     StorageAssignModal,
@@ -40,6 +42,7 @@ from screens.dashboard_modals import (
     StorageViewModal,
     TransactionModal,
     ViewCreditsModal,
+    RefundConfirmModal,
     VISIT_TYPES,
 )
 from screens.directory_select import DirectorySelectScreen
@@ -123,11 +126,14 @@ class Dashboard(Screen):
             "columns": [
                 ("ID", 5),
                 ("Date", 18),
-                ("Customer", 22),
+                ("Customer", 18),
                 ("Amount", 10),
-                ("Description", 28),
+                ("Description", 24),
                 ("Status", 12),
                 ("Via", 8),
+                ("Processed By", 16),
+                ("Refunded By", 16),
+                ("Refund Reason", 22),
             ],
             "cursor_type": "row",
         },
@@ -339,11 +345,7 @@ class Dashboard(Screen):
                     yield Label("Manual Transaction", classes="subtitle")
 
                     # Step 1: Inventory Cart
-                    with Vertical(classes="form-subsection"):
-                        yield Label(
-                            "Step 1: Select Items (Optional)",
-                            classes="subtitle",
-                        )
+                    with Collapsible(title="Step 1: Select Items (Optional)", collapsed=True):
                         yield Label(
                             "Click an item row to select it, set the quantity,"
                             " then click Add to Cart."
@@ -371,11 +373,7 @@ class Dashboard(Screen):
                             yield Button("Clear Cart", id="btn_clear_cart")
 
                     # Step 2: Add a custom line item not in the inventory list
-                    with Vertical(classes="form-subsection"):
-                        yield Label(
-                            "Step 2: Add Custom Item (Optional)",
-                            classes="subtitle",
-                        )
+                    with Collapsible(title="Step 2: Add Custom Item (Optional)", collapsed=True):
                         yield Label(
                             "Add charges not covered by the inventory above,"
                             " e.g. a workshop fee or donation."
@@ -399,8 +397,7 @@ class Dashboard(Screen):
                             )
 
                     # Step 3: Customer Details
-                    with Vertical(classes="form-subsection"):
-                        yield Label("Step 3: Customer Details", classes="subtitle")
+                    with Collapsible(title="Step 3: Customer Details", collapsed=True):
                         yield Label(
                             "Search for an existing user to auto-fill, or"
                             " enter details manually:"
@@ -450,24 +447,28 @@ class Dashboard(Screen):
                             id="btn_clear_pos_form",
                         )
 
-                    yield Label("Recent Transactions:", classes="subtitle")
-                    yield DataTable(id="pos_txns_table")
-
-                    with Horizontal(classes="filter-row"):
-                        yield Button(
-                            "Refresh",
-                            id="btn_refresh_pos_txns",
-                        )
-                        yield Button(
-                            "Check Terminal Status",
-                            variant="primary",
-                            id="btn_check_pos_status",
-                            disabled=True,
-                        )
+                    with Collapsible(title="Recent Transactions", collapsed=True):
+                        yield DataTable(id="pos_txns_table")
+                        with Horizontal(classes="filter-row"):
+                            yield Button(
+                                "Refresh",
+                                id="btn_refresh_pos_txns",
+                            )
+                            yield Button(
+                                "Check Terminal Status",
+                                variant="primary",
+                                id="btn_check_pos_status",
+                                disabled=True,
+                            )
+                            yield Button(
+                                "Issue Refund",
+                                variant="error",
+                                id="btn_issue_refund",
+                                disabled=True,
+                            )
 
                 # Subsection 1: Existing User Transactions (consolidated)
-                with Vertical(classes="purchase-section"):
-                    yield Label("Membership Transactions", classes="subtitle")
+                with Collapsible(title="Membership Transactions", collapsed=True, classes="purchase-section"):
                     yield Label(
                         "Search for a user to manage their memberships, day passes, and credits:"
                     )
@@ -556,18 +557,15 @@ class Dashboard(Screen):
             # === REGULAR USER VIEW ===
             else:
                 # Subsection 1: My Memberships
-                with Vertical(classes="purchase-section"):
-                    yield Label("My Memberships", classes="subtitle")
+                with Collapsible(title="My Memberships", collapsed=False, classes="purchase-section"):
                     yield DataTable(id="my_mem_table")
 
                 # Subsection 2: My Day Passes
-                with Vertical(classes="purchase-section"):
-                    yield Label("My Day Passes", classes="subtitle")
+                with Collapsible(title="My Day Passes", collapsed=False, classes="purchase-section"):
                     yield DataTable(id="my_daypass_table")
 
                 # Subsection 3: My Consumables
-                with Vertical(classes="purchase-section"):
-                    yield Label(f"My {currency} Ledger", classes="subtitle")
+                with Collapsible(title=f"My {currency} Ledger", collapsed=False, classes="purchase-section"):
                     yield Label(f"{currency} Balance: $0.00", id="my_balance_lbl")
                     yield DataTable(id="my_cons_table")
 
@@ -593,7 +591,11 @@ class Dashboard(Screen):
 
         yield Label("Admin and Statistics Reports:", classes="subtitle")
         yield Button(
-            "Export Period Traction Report",
+            "Export Period Transaction Report",
+            id="btn_period_transaction_report",
+        )
+        yield Button(
+            "Export Period User Activity Report",
             id="btn_period_traction_report",
         )
         yield Button(
@@ -827,6 +829,9 @@ class Dashboard(Screen):
             "btn_export_sql_pdf": lambda: self.initiate_export(
                 "#sql_results", "sql_query_result", "pdf"
             ),
+            "btn_period_transaction_report": lambda: self.app.push_screen(
+                PeriodTransactionReportModal()
+            ),
             "btn_period_traction_report": lambda: self.app.push_screen(
                 PeriodTractionReportModal()
             ),
@@ -858,6 +863,7 @@ class Dashboard(Screen):
             "btn_clear_pos_form": self.clear_pos_form,
             "btn_refresh_pos_txns": self.load_pos_transactions,
             "btn_check_pos_status": self.check_pos_terminal_status,
+            "btn_issue_refund": self._handle_issue_refund,
         }
 
     # --- Small handler methods extracted from on_button_pressed inline logic ---
@@ -1192,6 +1198,9 @@ class Dashboard(Screen):
             # Only enable status check for Square transactions (not local records)
             via = str(row_data[6])
             self.query_one("#btn_check_pos_status").disabled = via != "Square"
+            # Disable refund if already refunded (Status column)
+            already_refunded = str(row_data[5]).strip().lower() == "refunded"
+            self.query_one("#btn_issue_refund").disabled = already_refunded
             self.app.notify(f"Selected transaction #{self.selected_pos_txn_id}")
 
         elif event.data_table.id == "inv_available_table":
@@ -1526,6 +1535,10 @@ class Dashboard(Screen):
             self.query_one("#btn_check_pos_status").disabled = True
         except Exception:
             pass
+        try:
+            self.query_one("#btn_issue_refund").disabled = True
+        except Exception:
+            pass
 
         txns = square_service.get_recent_transactions(limit=50)
         for t in txns:
@@ -1538,14 +1551,18 @@ class Dashboard(Screen):
                 via = "Local"
             else:
                 via = "Square"
+            status = "Refunded" if t.refund_status == "refunded" else t.square_status.replace("_", " ").title()
             table.add_row(
                 str(t.id),
                 t.created_at.strftime("%Y-%m-%d %H:%M"),
                 t.customer_name or "",
                 f"${t.amount:.2f}",
-                (t.description or "")[:28],
-                t.square_status.replace("_", " ").title(),
+                (t.description or "")[:24],
+                status,
                 via,
+                t.processed_by or "",
+                t.refunded_by or "",
+                (t.refund_reason or "")[:22],
             )
 
     def process_manual_transaction(self):
@@ -1579,12 +1596,15 @@ class Dashboard(Screen):
         ]
         description = ", ".join(desc_parts)
 
+        staff = self.app.current_user
+        staff_name = f"{staff.first_name} {staff.last_name}" if staff else None
         ok, message, txn = square_service.process_terminal_checkout(
             amount=amount,
             customer_name=customer_name,
             customer_email=customer_email or None,
             customer_phone=customer_phone or None,
             description=description or None,
+            processed_by=staff_name,
         )
 
         severity = "information" if ok else "error"
@@ -1647,12 +1667,15 @@ class Dashboard(Screen):
         ]
         description = ", ".join(desc_parts)
 
+        staff = self.app.current_user
+        staff_name = f"{staff.first_name} {staff.last_name}" if staff else None
         ok, message, txn = square_service.record_cash_payment(
             amount=amount,
             customer_name=customer_name,
             customer_email=customer_email or None,
             customer_phone=customer_phone or None,
             description=description or None,
+            processed_by=staff_name,
         )
 
         severity = "information" if ok else "error"
@@ -1711,6 +1734,38 @@ class Dashboard(Screen):
         self.app.notify(message, severity=severity)
         if ok:
             self.load_pos_transactions()
+
+    def _handle_issue_refund(self):
+        """
+        Opens the refund confirmation modal for the selected transaction.
+        On confirmation, processes the refund and refreshes the table.
+        """
+        if not self.selected_pos_txn_id:
+            self.app.notify("Select a transaction row first.", severity="warning")
+            return
+        txn = square_service.get_transaction_by_id(self.selected_pos_txn_id)
+        if not txn:
+            self.app.notify("Transaction not found.", severity="error")
+            return
+
+        def on_refund_confirmed(reason: str | None) -> None:
+            if not reason:
+                return
+            staff = self.app.current_user
+            staff_name = f"{staff.first_name} {staff.last_name}" if staff else "Unknown"
+            ok, message = square_service.process_refund(
+                txn_id=self.selected_pos_txn_id,
+                reason=reason,
+                refunded_by=staff_name,
+            )
+            self.app.notify(message, severity="information" if ok else "error")
+            if ok:
+                self.load_pos_transactions()
+
+        self.app.push_screen(
+            RefundConfirmModal(txn.id, txn.amount, txn.customer_name or ""),
+            on_refund_confirmed,
+        )
 
     def save_user_preferences(self):
         """Reads and persists the current user's My Preferences widgets to UserPreference."""

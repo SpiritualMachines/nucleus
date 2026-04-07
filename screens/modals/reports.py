@@ -3,6 +3,7 @@
 __all__ = [
     "CommunityContactsReportModal",
     "PeriodTractionReportModal",
+    "PeriodTransactionReportModal",
 ]
 
 from datetime import datetime, timedelta
@@ -104,12 +105,13 @@ class CommunityContactsReportModal(ModalScreen):
             self.app.notify(f"Export Failed: {str(e)}", severity="error")
 
 
-class PeriodTractionReportModal(ModalScreen):
+class PeriodTransactionReportModal(ModalScreen):
     """
-    Modal for generating a Period Traction Report covering all recorded activity
-    within a user-selected date range. Includes active memberships, day passes,
-    consumable transactions, space sign-ins/outs, and community contact visits.
-    The user selects a save directory, then the report is written to CSV or PDF.
+    Modal for exporting a Period Transaction Report for a user-selected date range.
+    Splits all transactions into two sections — Square card (completed) and
+    cash/local — with totals at the bottom of each, matching the layout of the
+    monthly transaction report email. The user selects a save directory and the
+    report is written to CSV or PDF.
     """
 
     def compose(self) -> ComposeResult:
@@ -117,7 +119,138 @@ class PeriodTractionReportModal(ModalScreen):
         start = today - timedelta(days=30)
 
         with Vertical(classes="splash-container"):
-            yield Label("Generate Period Traction Report", classes="title")
+            yield Label("Generate Period Transaction Report", classes="title")
+            yield Label(
+                "Select a date range to include in the report.", classes="subtitle"
+            )
+
+            yield Label("Start Date (YYYY-MM-DD):")
+            yield Input(start.strftime("%Y-%m-%d"), id="ptr_start")
+
+            yield Label("End Date (YYYY-MM-DD):")
+            yield Input(today.strftime("%Y-%m-%d"), id="ptr_end")
+
+            with Horizontal(classes="filter-row"):
+                yield Button("Export CSV", variant="success", id="btn_ptr_csv")
+                yield Button("Export PDF", variant="primary", id="btn_ptr_pdf")
+                yield Button("Cancel", variant="error", id="btn_ptr_cancel")
+
+    def on_button_pressed(self, event: Button.Pressed):
+        if event.button.id == "btn_ptr_cancel":
+            self.dismiss(None)
+        elif event.button.id == "btn_ptr_csv":
+            self._initiate_export("csv")
+        elif event.button.id == "btn_ptr_pdf":
+            self._initiate_export("pdf")
+
+    def _initiate_export(self, fmt: str):
+        """Opens the directory selector, then runs the export once a path is chosen."""
+
+        def on_directory_selected(path: str | None):
+            if path:
+                self._run_export(fmt, path)
+
+        self.app.push_screen(DirectorySelectScreen(), on_directory_selected)
+
+    def _run_export(self, fmt: str, output_dir: str):
+        """Fetches transaction data and writes the file in the requested format."""
+        try:
+            start_str = self.query_one("#ptr_start").value.strip()
+            end_str = self.query_one("#ptr_end").value.strip()
+
+            start_date = datetime.strptime(start_str, "%Y-%m-%d")
+            end_date = datetime.strptime(end_str, "%Y-%m-%d").replace(
+                hour=23, minute=59, second=59
+            )
+
+            data = services.build_period_transaction_report_data(start_date, end_date)
+
+            # Build two flat sections — card and cash — each with a totals row appended
+            card_rows = [
+                [
+                    r["id"],
+                    r["date"],
+                    r["customer_name"],
+                    r["description"],
+                    r["amount_fmt"],
+                    r["processed_by"],
+                ]
+                for r in data["card_transactions"]
+            ]
+            card_rows.append(["", "", "", "Total", f"${data['card_total']:.2f}", ""])
+
+            cash_rows = [
+                [
+                    r["id"],
+                    r["date"],
+                    r["customer_name"],
+                    r["description"],
+                    r["amount_fmt"],
+                    r["processed_by"],
+                ]
+                for r in data["cash_transactions"]
+            ]
+            cash_rows.append(["", "", "", "Total", f"${data['cash_total']:.2f}", ""])
+
+            txn_headers = [
+                "ID",
+                "Date",
+                "Customer",
+                "Description",
+                "Amount",
+                "Processed By",
+            ]
+
+            sections = [
+                {
+                    "title": "Card Transactions (Square Terminal - Completed)",
+                    "headers": txn_headers,
+                    "rows": card_rows,
+                },
+                {
+                    "title": "Cash Transactions (Cash / Cash Square / Local)",
+                    "headers": txn_headers,
+                    "rows": cash_rows,
+                },
+            ]
+
+            filename = exporters.get_timestamp_filename("period_transaction_report", fmt)
+
+            if fmt == "csv":
+                path = exporters.export_period_report_to_csv(
+                    filename, sections, output_dir
+                )
+            else:
+                path = exporters.export_period_report_to_pdf(
+                    filename,
+                    f"Period Transaction Report: {data['period_label']}",
+                    sections,
+                    output_dir,
+                )
+
+            self.app.notify(f"Exported to: {path}")
+            self.dismiss(None)
+
+        except ValueError:
+            self.app.notify("Invalid date format. Use YYYY-MM-DD.", severity="error")
+        except Exception as e:
+            self.app.notify(f"Export Failed: {str(e)}", severity="error")
+
+class PeriodTractionReportModal(ModalScreen):
+    """
+    Modal for generating a Period User Activity Report covering all recorded
+    activity within a user-selected date range. Includes active memberships,
+    day passes, consumable transactions, space sign-ins/outs, and community
+    contact visits. The user selects a save directory, then the report is
+    written to CSV or PDF.
+    """
+
+    def compose(self) -> ComposeResult:
+        today = datetime.now()
+        start = today - timedelta(days=30)
+
+        with Vertical(classes="splash-container"):
+            yield Label("Generate Period User Activity Report", classes="title")
             yield Label(
                 "Select a date range to include in the report.", classes="subtitle"
             )

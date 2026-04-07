@@ -415,6 +415,12 @@ class SettingsScreen(Widget):
                         value=pos_cfg.square_currency or "CAD",
                     )
 
+                    yield Checkbox(
+                        "Push cash payments to Square",
+                        id="setting_square_push_cash_enabled",
+                        value=pos_cfg.square_push_cash_enabled,
+                    )
+
                     yield Button(
                         "Save POS Settings",
                         variant="success",
@@ -669,7 +675,7 @@ class SettingsScreen(Widget):
                     )
 
                     yield Label(
-                        "Send Daily Report To (comma-separated email addresses):"
+                        "Send Daily and Transaction Reports To (comma-separated email addresses):"
                     )
                     yield Input(
                         services.get_setting("report_to_email", ""),
@@ -688,6 +694,15 @@ class SettingsScreen(Widget):
                         id="setting_email_reports_enabled",
                         value=services.get_setting(
                             "email_reports_enabled", "false"
+                        ).lower()
+                        == "true",
+                    )
+
+                    yield Checkbox(
+                        "Enable Monthly Transaction Report",
+                        id="setting_monthly_transaction_report_enabled",
+                        value=services.get_setting(
+                            "monthly_transaction_report_enabled", "false"
                         ).lower()
                         == "true",
                     )
@@ -1103,6 +1118,9 @@ class SettingsScreen(Widget):
             to_email = self.query_one("#setting_to_email", Input).value.strip()
             send_time = self.query_one("#setting_report_send_time", Input).value.strip()
             enabled = self.query_one("#setting_email_reports_enabled", Checkbox).value
+            monthly_report_enabled = self.query_one(
+                "#setting_monthly_transaction_report_enabled", Checkbox
+            ).value
             receipts_enabled = self.query_one(
                 "#setting_email_receipts_enabled", Checkbox
             ).value
@@ -1156,6 +1174,10 @@ class SettingsScreen(Widget):
             services.set_setting("report_send_time", send_time)
             services.set_setting(
                 "email_reports_enabled", "true" if enabled else "false"
+            )
+            services.set_setting(
+                "monthly_transaction_report_enabled",
+                "true" if monthly_report_enabled else "false",
             )
             services.set_setting(
                 "email_receipts_enabled", "true" if receipts_enabled else "false"
@@ -1464,6 +1486,9 @@ class SettingsScreen(Widget):
             ).value.strip()
             device_id = self.query_one("#setting_square_device_id", Input).value.strip()
             currency = self.query_one("#setting_square_currency", Select).value or "CAD"
+            push_cash_enabled = self.query_one(
+                "#setting_square_push_cash_enabled", Checkbox
+            ).value
 
             if environment not in ("sandbox", "production"):
                 self.app.notify(
@@ -1477,6 +1502,7 @@ class SettingsScreen(Widget):
                 location_id=location_id,
                 device_id=device_id,
                 currency=currency,
+                push_cash_enabled=push_cash_enabled,
             )
             self.app.notify("POS settings saved.")
         except Exception as e:

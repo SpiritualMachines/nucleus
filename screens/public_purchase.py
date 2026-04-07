@@ -11,7 +11,7 @@ still shown for quick confirmation that a submission was recorded.
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.screen import ModalScreen
-from textual.widgets import Button, DataTable, Input, Label
+from textual.widgets import Button, Collapsible, DataTable, Input, Label
 
 from core import services, square_service
 
@@ -44,8 +44,7 @@ class PublicPurchaseModal(ModalScreen):
             yield Label("Manual Purchase", classes="title")
             with VerticalScroll(classes="splash-content"):
                 # Step 1: Inventory Cart
-                with Vertical(classes="form-subsection"):
-                    yield Label("Step 1: Select Items (Optional)", classes="subtitle")
+                with Collapsible(title="Step 1: Select Items (Optional)", collapsed=True):
                     yield Label(
                         "Click an item row to select it, set the quantity,"
                         " then click Add to Cart."
@@ -71,8 +70,7 @@ class PublicPurchaseModal(ModalScreen):
                         yield Button("Clear Cart", id="btn_pp_clear_cart")
 
                 # Step 2: Transaction Details
-                with Vertical(classes="form-subsection"):
-                    yield Label("Step 2: Transaction Details", classes="subtitle")
+                with Collapsible(title="Step 2: Transaction Details", collapsed=True):
                     yield Label(
                         "Auto-filled from cart. Edit as needed or enter manually."
                     )
@@ -84,8 +82,7 @@ class PublicPurchaseModal(ModalScreen):
                     )
 
                 # Step 3: Customer Details
-                with Vertical(classes="form-subsection"):
-                    yield Label("Step 3: Customer Details", classes="subtitle")
+                with Collapsible(title="Step 3: Customer Details", collapsed=True):
                     yield Label("Customer Name:")
                     yield Input(
                         placeholder="First and Last Name", id="pp_customer_name"
@@ -108,11 +105,17 @@ class PublicPurchaseModal(ModalScreen):
                     )
                     yield Button("Clear", id="btn_pp_clear")
 
-                yield Label("Recent Transactions:", classes="subtitle")
-                # Customer columns are intentionally omitted — this table is
-                # visible on a shared login screen where other visitors may see it.
-                yield DataTable(id="pp_txns_table")
-                yield Button("Refresh", id="btn_pp_refresh")
+                # Recent Transactions
+                with Collapsible(title="Recent Transactions", collapsed=True):
+                    yield Label(
+                        "Showing transactions from the last 7 days."
+                        " Log in to view the full history and manage transactions."
+                    )
+                    yield Label("")
+                    # Customer columns are intentionally omitted — this table is
+                    # visible on a shared login screen where other visitors may see it.
+                    yield DataTable(id="pp_txns_table")
+                    yield Button("Refresh", id="btn_pp_refresh")
 
             with Horizontal(classes="filter-row"):
                 yield Button("Close", variant="error", id="btn_pp_close")
@@ -269,7 +272,7 @@ class PublicPurchaseModal(ModalScreen):
         square_service.refresh_pending_transactions()
         table = self.query_one("#pp_txns_table", DataTable)
         table.clear()
-        for txn in square_service.get_recent_transactions(limit=20):
+        for txn in square_service.get_recent_transactions(limit=20, days=7):
             if txn.square_status == "cash_square":
                 via = "Cash (Square)"
             elif txn.square_status == "cash":

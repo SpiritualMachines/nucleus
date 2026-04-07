@@ -219,6 +219,159 @@ def send_daily_report() -> bool:
     return True
 
 
+def send_monthly_transaction_report(year: int, month: int) -> bool:
+    """
+    Builds and sends the monthly transaction report email via Resend.
+    Covers all transactions from the given calendar month, split into
+    Square card and cash/local tables.
+
+    Returns True on successful delivery, False when disabled or misconfigured.
+    Raises on unexpected API errors so the caller can surface them as notifications.
+
+    Required settings:
+      - resend_api_key                       (sensitive)
+      - report_from_email
+      - report_to_email
+      - monthly_transaction_report_enabled   ("true" / "false")
+    """
+    if get_setting("monthly_transaction_report_enabled", "false").lower() != "true":
+        print("[Email] Monthly transaction report disabled in settings")
+        return False
+
+    api_key = get_sensitive_setting_value("resend_api_key")
+    from_email = get_setting("report_from_email", "onboarding@resend.dev")
+    to_email_raw = get_setting("report_to_email", "")
+
+    if not api_key:
+        print("[Email] Cannot send monthly report: API key not configured")
+        return False
+
+    to_emails = [addr.strip() for addr in to_email_raw.split(",") if addr.strip()]
+    if not to_emails:
+        print("[Email] Cannot send monthly report: recipient email not configured")
+        return False
+
+    from core.services import build_monthly_transaction_report_data
+
+    data = build_monthly_transaction_report_data(year, month)
+    html_body = _build_monthly_transaction_report_html(data)
+
+    resend.api_key = api_key
+
+    params = {
+        "from": from_email,
+        "to": to_emails,
+        "subject": (
+            f"{data['hackspace_name']} - Monthly Transaction Report"
+            f" - {data['month_label']}"
+        ),
+        "html": html_body,
+    }
+
+    resend.Emails.send(params)
+    print(
+        f"[Email] Monthly transaction report for {data['month_label']}"
+        f" sent to {', '.join(to_emails)}"
+    )
+    return True
+
+
+def _build_monthly_transaction_report_html(data: dict) -> str:
+    """
+    Renders the monthly transaction data as two HTML tables — one for
+    Square card transactions and one for cash/local transactions — each
+    with a totals row at the bottom. Reuses the shared style constants
+    defined at module level.
+    """
+    divider = "<div style='border-top: 1px solid #ddd; margin: 20px 0;'></div>"
+
+    _TOTAL_CELL_STYLE = (
+        "padding: 5px 10px; border: 1px solid #555; background: #2d2d2d; "
+        "color: #fff; font-weight: bold; text-align: center;"
+    )
+    _TOTAL_LABEL_STYLE = (
+        "padding: 5px 10px; border: 1px solid #555; background: #2d2d2d; "
+        "color: #fff; font-weight: bold; text-align: right;"
+    )
+
+    def _build_txn_table(rows: list, total: float) -> str:
+        if not rows:
+            return (
+                "<p style='color: #888;'>No transactions recorded for this period.</p>"
+            )
+
+        headers = ["ID", "Date", "Customer", "Description", "Amount", "Processed By"]
+        header_cells = "".join(
+            f"<th style='{_TH_STYLE}'>{h}</th>" for h in headers
+        )
+        thead = f"<thead><tr>{header_cells}</tr></thead>"
+
+        body_rows = []
+        for i, r in enumerate(rows):
+            td = _TD_ALT_STYLE if i % 2 else _TD_STYLE
+            cells = "".join(
+                f"<td style='{td}'>{v}</td>"
+                for v in [
+                    r["id"],
+                    r["date"],
+                    r["customer_name"],
+                    r["description"],
+                    r["amount_fmt"],
+                    r["processed_by"],
+                ]
+            )
+            body_rows.append(f"<tr>{cells}</tr>")
+
+        # Totals row — label spans first 4 columns, then the total, then blank
+        totals_row = (
+            f"<tr>"
+            f"<td colspan='4' style='{_TOTAL_LABEL_STYLE}'>Total</td>"
+            f"<td style='{_TOTAL_CELL_STYLE}'>${total:.2f}</td>"
+            f"<td style='{_TOTAL_CELL_STYLE}'></td>"
+            f"</tr>"
+        )
+        body_rows.append(totals_row)
+
+        tbody = f"<tbody>{''.join(body_rows)}</tbody>"
+        return f"<table style='{_TABLE_STYLE}'>{thead}{tbody}</table>"
+
+    card_table = _build_txn_table(data["card_transactions"], data["card_total"])
+    cash_table = _build_txn_table(data["cash_transactions"], data["cash_total"])
+
+    from datetime import datetime as _dt
+
+    unique_token = _dt.now().strftime("%Y%m%d%H%M%S%f")
+
+    return f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body style="font-family: sans-serif; color: #333; max-width: 960px; margin: auto; padding: 20px;">
+  <div>
+    <h2 style="margin-bottom: 0;">{data["hackspace_name"]} - Monthly Transaction Report</h2>
+    <p style="margin-top: 4px; color: #666;">
+      <strong>Period:</strong> {data["month_label"]}
+    </p>
+    {divider}
+    <h3 style="border-bottom: 2px solid #333; padding-bottom: 4px;">
+      Card Transactions (Square Terminal - Completed)
+    </h3>
+    {card_table}
+    {divider}
+    <h3 style="border-bottom: 2px solid #333; padding-bottom: 4px;">
+      Cash Transactions (Cash / Cash Square / Local)
+    </h3>
+    {cash_table}
+    {divider}
+    <span style="display:none">{unique_token}</span>
+    <p style="font-size: 0.8em; color: #999;">
+      Sent automatically by Nucleus on the 1st of each month.
+      To disable, turn off monthly transaction reports in Settings.
+    </p>
+  </div>
+</body>
+</html>"""
+
+
 def send_backup_email(backup_path: str, backup_filename: str, to_email: str) -> bool:
     """
     Emails the database backup file as an attachment to the given address.

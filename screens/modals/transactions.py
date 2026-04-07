@@ -3,12 +3,13 @@
 __all__ = [
     "TransactionModal",
     "ViewCreditsModal",
+    "RefundConfirmModal",
 ]
 
 from textual.app import ComposeResult
 from textual.containers import Horizontal, Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Button, DataTable, Input, Label
+from textual.widgets import Button, Collapsible, DataTable, Input, Label
 
 from core import services, square_service
 
@@ -39,29 +40,31 @@ class TransactionModal(ModalScreen):
                 classes="subtitle",
             )
 
-            yield Label("Amount ($):")
-            yield Input(placeholder="0.00", type="number", id="txn_amount")
+            with Collapsible(title="Transaction Details", collapsed=False):
+                yield Label("Amount ($):")
+                yield Input(placeholder="0.00", type="number", id="txn_amount")
+                yield Label("Description:")
+                yield Input(placeholder="e.g., 3D Print Filament", id="txn_desc")
 
-            yield Label("Description:")
-            yield Input(placeholder="e.g., 3D Print Filament", id="txn_desc")
+            with Collapsible(title="Payment Method", collapsed=False):
+                with Horizontal(classes="filter-row"):
+                    if self.initial_type == "credit":
+                        # For credit: show payment buttons
+                        square_label = (
+                            "Process Square Transaction"
+                            if self.square_enabled
+                            else "Process Transaction (Local)"
+                        )
+                        yield Button(square_label, variant="success", id="btn_pay_square")
+                        yield Button("Record as Cash", variant="warning", id="btn_pay_cash")
+                    else:
+                        # For debit: show single record button
+                        yield Button(
+                            f"Record {self.currency_name} Deduction",
+                            variant="primary",
+                            id="btn_process",
+                        )
 
-            with Horizontal(classes="filter-row"):
-                if self.initial_type == "credit":
-                    # For credit: show payment buttons
-                    square_label = (
-                        "Process Square Transaction"
-                        if self.square_enabled
-                        else "Process Transaction (Local)"
-                    )
-                    yield Button(square_label, variant="success", id="btn_pay_square")
-                    yield Button("Record as Cash", variant="warning", id="btn_pay_cash")
-                else:
-                    # For debit: show single record button
-                    yield Button(
-                        f"Record {self.currency_name} Deduction",
-                        variant="primary",
-                        id="btn_process",
-                    )
             with Horizontal(classes="filter-row"):
                 yield Button("Cancel", id="btn_cancel")
 
@@ -175,3 +178,40 @@ class ViewCreditsModal(ModalScreen):
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "btn_close":
             self.dismiss()
+
+
+class RefundConfirmModal(ModalScreen):
+    """
+    Confirmation dialog for issuing a refund against a SquareTransaction.
+    Requires staff to enter a reason before the refund can be submitted.
+    Dismisses with the reason string on confirm, or None on cancel.
+    """
+
+    def __init__(self, txn_id: int, amount: float, customer_name: str):
+        super().__init__()
+        self.txn_id = txn_id
+        self.amount = amount
+        self.customer_name = customer_name
+
+    def compose(self) -> ComposeResult:
+        with Vertical(classes="splash-container"):
+            yield Label("Issue Refund", classes="title")
+            yield Label(
+                f"Transaction #{self.txn_id} - {self.customer_name} - ${self.amount:.2f}",
+                classes="subtitle",
+            )
+            yield Label("Refund Reason (required):")
+            yield Input(placeholder="Enter reason for refund", id="refund_reason")
+            with Horizontal(classes="filter-row"):
+                yield Button("Confirm Refund", variant="error", id="btn_confirm_refund")
+                yield Button("Cancel", id="btn_cancel_refund")
+
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "btn_cancel_refund":
+            self.dismiss(None)
+        elif event.button.id == "btn_confirm_refund":
+            reason = self.query_one("#refund_reason", Input).value.strip()
+            if not reason:
+                self.app.notify("A refund reason is required.", severity="error")
+                return
+            self.dismiss(reason)

@@ -85,6 +85,7 @@ class HackspaceApp(App):
         threading.Thread(target=self.run_maintenance_scheduler, daemon=True).start()
         threading.Thread(target=self.run_backup_scheduler, daemon=True).start()
         threading.Thread(target=self.run_email_scheduler, daemon=True).start()
+        threading.Thread(target=self.run_monthly_report_scheduler, daemon=True).start()
 
         # 3. Initialize DB, apply pending schema migrations, seed settings, then load UI
         create_db_and_tables()
@@ -204,6 +205,61 @@ class HackspaceApp(App):
                 self.send_daily_email_report()
                 sent_date = today
                 services.set_setting("report_last_sent_date", str(today))
+
+    def run_monthly_report_scheduler(self):
+        """
+        Daemon thread that fires the monthly transaction report on the 1st of each
+        month. The report covers all transactions from the previous calendar month
+        and is sent to the same recipient list as the daily report.
+
+        Polls every 60 seconds using the same pattern as run_email_scheduler so the
+        scheduler survives system sleep. The last-sent period is persisted as "YYYY-MM"
+        in monthly_report_last_sent_month to prevent duplicate sends after a restart.
+        """
+        while True:
+            time.sleep(60)
+
+            # Re-read the feature flag on every poll so setting changes take effect immediately
+            enabled = (
+                services.get_setting(
+                    "monthly_transaction_report_enabled", "false"
+                ).lower()
+                == "true"
+            )
+            if not enabled:
+                continue
+
+            now = datetime.now()
+
+            # Only fire on the 1st day of the month
+            if now.day != 1:
+                continue
+
+            # Determine which month the report covers (the month just ended)
+            if now.month == 1:
+                report_year, report_month = now.year - 1, 12
+            else:
+                report_year, report_month = now.year, now.month - 1
+
+            report_month_key = f"{report_year}-{report_month:02d}"
+
+            # Re-read the last-sent marker from the DB on every poll so restarts
+            # and manual resets are recognised without needing an app restart.
+            last_sent = ""
+            try:
+                last_sent = services.get_setting("monthly_report_last_sent_month", "")
+            except Exception:
+                last_sent = ""
+
+            if last_sent == report_month_key:
+                continue
+
+            print(
+                f"[Monthly Report Scheduler] Triggering monthly transaction report"
+                f" for {report_month_key} at {now}"
+            )
+            self.send_monthly_transaction_report_email(report_year, report_month)
+            services.set_setting("monthly_report_last_sent_month", report_month_key)
 
     def run_backup_scheduler(self):
         """
@@ -329,6 +385,62 @@ class HackspaceApp(App):
             self.call_from_thread(
                 self.notify,
                 f"Daily report email error: {str(e)}",
+                severity="error",
+            )
+
+    def send_monthly_transaction_report_email(self, year: int, month: int) -> None:
+        """
+        Sends the monthly transaction report email if the feature is enabled and
+        all required settings are configured. Errors are surfaced as UI notifications
+        so staff are informed without having to check logs.
+        """
+        try:
+            from core.email_service import send_monthly_transaction_report
+            from core import services
+
+            enabled = (
+                services.get_setting(
+                    "monthly_transaction_report_enabled", "false"
+                ).lower()
+                == "true"
+            )
+            if not enabled:
+                return
+
+            api_key = services.get_sensitive_setting_value("resend_api_key")
+            to_email = services.get_setting("report_to_email", "").strip()
+
+            if not api_key:
+                self.call_from_thread(
+                    self.notify,
+                    "Monthly report skipped: Resend API key not configured.",
+                    severity="warning",
+                )
+                return
+
+            if not to_email:
+                self.call_from_thread(
+                    self.notify,
+                    "Monthly report skipped: Report recipient email not configured.",
+                    severity="warning",
+                )
+                return
+
+            sent = send_monthly_transaction_report(year, month)
+            if sent:
+                self.call_from_thread(
+                    self.notify, "Monthly transaction report email sent successfully."
+                )
+            else:
+                self.call_from_thread(
+                    self.notify,
+                    "Monthly report failed to send (check logs).",
+                    severity="error",
+                )
+        except Exception as e:
+            self.call_from_thread(
+                self.notify,
+                f"Monthly report email error: {str(e)}",
                 severity="error",
             )
 

@@ -5,6 +5,46 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.9.79] - 2026-04-02
+
+### Added
+
+#### Added Monthly Transaction Report
+- Added the ability to enable a monthly transaction report to sends out an email that contains tables of all the Square transactions and all of the cash transactions with totals.
+
+#### Added and Adjusted Manual Reports
+- Changed layout for Period Transaction Report and make existing report layout for said button Period User Activity Transaction Report. 
+
+### Fixed
+
+#### Improved Update Tool
+- Improved the update tool so it properly updates the application files without running into permission errors.
+
+---
+
+## [0.9.78] - 2026-03-27
+
+### Added
+
+#### Added Auto Update Script
+- Expanded update.py script functionality to be an auto update script.
+
+#### Added Transaction Refunds
+- Added the ability to refund cash and Square transactions.
+
+#### Push Cash to Square Toggle
+- Added ability to toggle pushing cash transactions to Square on and off.
+
+#### Improved Purchases Tab UI
+- Cleaned up UI on purchases tab for readability; made subsections collapsable.
+
+### Fixed
+
+#### Cash Details Error
+- Fixed cash_details error when processing a cash transaction. 
+
+___
+
 ## [0.9.77] - 2026-03-24
 
 ### Added

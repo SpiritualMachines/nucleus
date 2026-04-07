@@ -20,7 +20,7 @@ transaction so the staff always gets an audit record regardless of POS state.
 
 import json
 import uuid
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import List, Optional, Tuple
 
 from sqlmodel import Session, desc, select
@@ -67,6 +67,7 @@ def save_pos_config(
     location_id: str,
     device_id: str,
     currency: str,
+    push_cash_enabled: bool = False,
 ) -> None:
     """
     Persists the non-sensitive POS configuration fields.
@@ -82,6 +83,7 @@ def save_pos_config(
         config.square_location_id = location_id.strip()
         config.square_device_id = device_id.strip()
         config.square_currency = currency.strip().upper() or "CAD"
+        config.square_push_cash_enabled = push_cash_enabled
         session.add(config)
         session.commit()
 
@@ -228,6 +230,7 @@ def _create_transaction_record(
     square_location_id: Optional[str] = None,
     square_status: str = SquareTransactionStatus.LOCAL,
     square_raw_response: Optional[str] = None,
+    processed_by: Optional[str] = None,
 ) -> SquareTransaction:
     """
     Inserts a SquareTransaction row and returns the refreshed object.
@@ -247,6 +250,7 @@ def _create_transaction_record(
             square_location_id=square_location_id,
             square_status=square_status,
             square_raw_response=square_raw_response,
+            processed_by=processed_by or None,
         )
         session.add(txn)
         session.commit()
@@ -266,6 +270,7 @@ def process_terminal_checkout(
     customer_phone: Optional[str],
     description: Optional[str],
     user_account_number: Optional[int] = None,
+    processed_by: Optional[str] = None,
 ) -> Tuple[bool, str, Optional[SquareTransaction]]:
     """
     Sends a payment request to the configured Square Terminal device and records
@@ -292,6 +297,7 @@ def process_terminal_checkout(
             user_account_number=user_account_number,
             is_local=True,
             square_status=SquareTransactionStatus.LOCAL,
+            processed_by=processed_by,
         )
         return (
             True,
@@ -367,6 +373,7 @@ def process_terminal_checkout(
             is_local=False,
             square_status=SquareTransactionStatus.ERROR,
             square_raw_response=str(exc),
+            processed_by=processed_by,
         )
         return False, f"Square API error: {exc}", txn
 
@@ -382,6 +389,7 @@ def process_terminal_checkout(
             is_local=False,
             square_status=SquareTransactionStatus.FAILED,
             square_raw_response=json.dumps([e.__dict__ for e in result.errors]),
+            processed_by=processed_by,
         )
         return False, f"Square returned errors: {error_msg}", txn
 
@@ -402,6 +410,7 @@ def process_terminal_checkout(
         square_raw_response=json.dumps(
             checkout.model_dump() if hasattr(checkout, "model_dump") else str(checkout)
         ),
+        processed_by=processed_by,
     )
     return (
         True,
@@ -417,6 +426,7 @@ def record_cash_payment(
     customer_phone: Optional[str],
     description: Optional[str],
     user_account_number: Optional[int] = None,
+    processed_by: Optional[str] = None,
 ) -> Tuple[bool, str, Optional[SquareTransaction]]:
     """
     Records a cash payment in Square's Payments API so the transaction appears
@@ -444,10 +454,30 @@ def record_cash_payment(
             user_account_number=user_account_number,
             is_local=True,
             square_status=SquareTransactionStatus.CASH,
+            processed_by=processed_by,
         )
         return (
             True,
             "Cash transaction recorded locally (Square Terminal is not enabled).",
+            txn,
+        )
+
+    # Push to Square disabled for cash — record locally only
+    if not config.square_push_cash_enabled:
+        txn = _create_transaction_record(
+            amount=amount,
+            customer_name=customer_name,
+            customer_email=customer_email,
+            customer_phone=customer_phone,
+            description=description,
+            user_account_number=user_account_number,
+            is_local=True,
+            square_status=SquareTransactionStatus.CASH,
+            processed_by=processed_by,
+        )
+        return (
+            True,
+            "Cash transaction recorded locally (push cash to Square is disabled).",
             txn,
         )
 
@@ -462,6 +492,7 @@ def record_cash_payment(
             user_account_number=user_account_number,
             is_local=True,
             square_status=SquareTransactionStatus.CASH,
+            processed_by=processed_by,
         )
         return (
             True,
@@ -480,6 +511,7 @@ def record_cash_payment(
             user_account_number=user_account_number,
             is_local=True,
             square_status=SquareTransactionStatus.CASH,
+            processed_by=processed_by,
         )
         return (
             True,
@@ -512,13 +544,19 @@ def record_cash_payment(
 
     try:
         from square.requests.money import MoneyParams
+        from square.requests.cash_payment_details import CashPaymentDetailsParams
+
+        currency = config.square_currency or "CAD"
+        amount_money = MoneyParams(amount=amount_cents, currency=currency)
 
         result = client.payments.create(
             idempotency_key=str(uuid.uuid4()),
             source_id="CASH",
-            amount_money=MoneyParams(
-                amount=amount_cents,
-                currency=config.square_currency or "CAD",
+            amount_money=amount_money,
+            # Square requires cash_details when source_id is CASH. buyer_supplied_money
+            # is set equal to the charge amount since we do not collect the tendered amount.
+            cash_details=CashPaymentDetailsParams(
+                buyer_supplied_money=MoneyParams(amount=amount_cents, currency=currency),
             ),
             location_id=config.square_location_id,
             customer_id=square_customer_id,
@@ -540,6 +578,7 @@ def record_cash_payment(
             is_local=True,
             square_status=SquareTransactionStatus.CASH,
             square_raw_response=str(exc),
+            processed_by=processed_by,
         )
         return False, f"Square API error: {exc}", txn
 
@@ -555,6 +594,7 @@ def record_cash_payment(
             is_local=False,
             square_status=SquareTransactionStatus.FAILED,
             square_raw_response=json.dumps([e.__dict__ for e in result.errors]),
+            processed_by=processed_by,
         )
         return False, f"Square returned errors: {error_msg}", txn
 
@@ -574,6 +614,7 @@ def record_cash_payment(
         square_raw_response=json.dumps(
             payment.model_dump() if hasattr(payment, "model_dump") else str(payment)
         ),
+        processed_by=processed_by,
     )
     return (
         True,
@@ -986,12 +1027,97 @@ def poll_all_active_subscriptions() -> Tuple[int, int]:
     return polled, errors
 
 
-def get_recent_transactions(limit: int = 50) -> List[SquareTransaction]:
-    """Returns the most recent SquareTransaction records, newest first."""
+def get_recent_transactions(
+    limit: int = 50, days: Optional[int] = None
+) -> List[SquareTransaction]:
+    """Returns the most recent SquareTransaction records, newest first.
+
+    Args:
+        limit: Maximum number of records to return.
+        days: When provided, restricts results to transactions created within
+              the last N days. Filtering is done in Python to avoid SQLite
+              datetime string comparison inconsistencies.
+    """
     with Session(engine) as session:
-        stmt = (
-            select(SquareTransaction)
-            .order_by(desc(SquareTransaction.created_at))
-            .limit(limit)
-        )
-        return session.exec(stmt).all()
+        stmt = select(SquareTransaction).order_by(desc(SquareTransaction.created_at))
+        if days is None:
+            stmt = stmt.limit(limit)
+        results = session.exec(stmt).all()
+        if days is not None:
+            cutoff = datetime.now() - timedelta(days=days)
+            results = [t for t in results if t.created_at >= cutoff]
+            results = results[:limit]
+        return results
+
+
+def get_transaction_by_id(txn_id: int) -> Optional[SquareTransaction]:
+    """Returns a single SquareTransaction by primary key, or None if not found."""
+    with Session(engine) as session:
+        return session.get(SquareTransaction, txn_id)
+
+
+def process_refund(
+    txn_id: int,
+    reason: str,
+    refunded_by: str,
+) -> Tuple[bool, str]:
+    """
+    Issues a refund for a transaction. For Square card payments that have a
+    square_payment_id, the Square Refunds API is called to process the actual
+    refund. For local, cash, and other non-card transactions the refund is
+    recorded in the local database only.
+
+    Returns a (success, message) tuple.
+    """
+    with Session(engine) as session:
+        txn = session.get(SquareTransaction, txn_id)
+        if not txn:
+            return False, f"Transaction #{txn_id} not found."
+        if txn.refund_status == "refunded":
+            return False, f"Transaction #{txn_id} has already been refunded."
+        payment_id = txn.square_payment_id
+        amount = txn.amount
+
+    square_refund_processed = False
+
+    # Attempt Square API refund only for card transactions that have a payment ID
+    if payment_id:
+        client = _get_square_client()
+        if client:
+            config = get_pos_config()
+            try:
+                from square.requests.money import MoneyParams
+
+                amount_cents = int(round(amount * 100))
+                result = client.refunds.refund_payment(
+                    idempotency_key=str(uuid.uuid4()),
+                    amount_money=MoneyParams(
+                        amount=amount_cents,
+                        currency=config.square_currency or "CAD",
+                    ),
+                    payment_id=payment_id,
+                    reason=reason,
+                )
+            except Exception as exc:
+                return False, f"Square refund error: {exc}"
+
+            if result.errors:
+                error_msg = "; ".join((e.detail or str(e)) for e in result.errors)
+                return False, f"Square refund failed: {error_msg}"
+
+            square_refund_processed = True
+
+    # Persist the refund record regardless of whether Square was involved
+    with Session(engine) as session:
+        txn = session.get(SquareTransaction, txn_id)
+        txn.refund_status = "refunded"
+        txn.refund_reason = reason
+        txn.refunded_at = datetime.now()
+        txn.refunded_by = refunded_by
+        txn.updated_at = datetime.now()
+        session.add(txn)
+        session.commit()
+
+    if square_refund_processed:
+        return True, f"Refund of ${amount:.2f} processed via Square."
+    return True, f"Refund of ${amount:.2f} recorded locally."

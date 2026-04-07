@@ -121,6 +121,9 @@ def run_migrations():
         _verify_and_add_column(session, "user", "warnings", "TEXT")
         _verify_and_add_column(session, "user", "account_comments", "TEXT")
 
+        # safetytraining table
+        _verify_and_add_column(session, "safetytraining", "whmis", "INTEGER DEFAULT 0")
+
         # feedback table
         _verify_and_add_column(session, "feedback", "admin_response", "TEXT")
 
@@ -173,8 +176,18 @@ def run_migrations():
         _verify_and_add_column(
             session, "posconfig", "square_access_token_production", "VARCHAR DEFAULT ''"
         )
+        _verify_and_add_column(
+            session, "posconfig", "square_push_cash_enabled", "BOOLEAN DEFAULT 0"
+        )
         # Remove the legacy single-token column — replaced by the per-environment fields.
         _verify_and_drop_column(session, "posconfig", "square_access_token")
+
+        # squaretransaction table — refund tracking and staff attribution fields.
+        _verify_and_add_column(session, "squaretransaction", "processed_by", "VARCHAR")
+        _verify_and_add_column(session, "squaretransaction", "refund_status", "VARCHAR")
+        _verify_and_add_column(session, "squaretransaction", "refund_reason", "TEXT")
+        _verify_and_add_column(session, "squaretransaction", "refunded_at", "DATETIME")
+        _verify_and_add_column(session, "squaretransaction", "refunded_by", "VARCHAR")
 
         # user table — Square subscription tracking fields added for recurring billing.
         _verify_and_add_column(session, "user", "square_customer_id", "VARCHAR")

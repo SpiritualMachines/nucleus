@@ -84,7 +84,7 @@ def initialize_default_settings(seed_values: dict = None):
         "hackspace_name": "Hackspace",
         "tag_name": "Makerspace",
         "app_name": "Nucleus Daemon",
-        "app_version": "v0.9.77",
+        "app_version": "v0.9.79",
         "ascii_logo": "",
         "logout_timeout_minutes": "10",
         # Space operations
@@ -116,6 +116,10 @@ def initialize_default_settings(seed_values: dict = None):
         # notification is triggered in the application
         "error_email_enabled": "false",
         "error_email_to": "",
+        # Monthly transaction report — fires on the 1st of each month for the previous month
+        "monthly_transaction_report_enabled": "false",
+        # Stores the last reported period as "YYYY-MM" to prevent duplicate sends
+        "monthly_report_last_sent_month": "",
     }
     if seed_values:
         defaults.update(seed_values)

@@ -4,7 +4,7 @@ A membership management application for hackerspaces and makerspaces.
 Built with a fast-to-deploy terminal UI and a platform-agnostic core library
 designed to support a future web frontend.
 
-**Current version:** 0.9.77
+**Current version:** 0.9.79
 **License:** AGPLv3
 
 ---
