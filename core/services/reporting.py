@@ -11,8 +11,11 @@ from core.database import engine
 from core.models import (
     ActiveMembership,
     CommunityContact,
+    DayPass,
     Feedback,
     MembershipDues,
+    ProductSale,
+    ProductTier,
     SafetyTraining,
     SpaceAttendance,
     SquareTransaction,
@@ -24,6 +27,7 @@ from core.services.settings import get_setting
 
 __all__ = [
     "get_period_traction_report_data",
+    "get_products_services_report_data",
     "get_everything_people_data",
     "build_daily_report_data",
     "build_monthly_transaction_report_data",
@@ -63,14 +67,13 @@ def get_period_traction_report_data(start_date: datetime, end_date: datetime) ->
 
         # Day passes issued during the period
         dp_rows = session.exec(
-            select(UserCredits, User)
-            .join(User, UserCredits.user_account_number == User.account_number)
+            select(DayPass, User)
+            .join(User, DayPass.user_account_number == User.account_number)
             .where(
-                UserCredits.credit_debit == "daypass",
-                UserCredits.date >= start_date,
-                UserCredits.date <= end_date,
+                DayPass.date >= start_date,
+                DayPass.date <= end_date,
             )
-            .order_by(UserCredits.date)
+            .order_by(DayPass.date)
         ).all()
         day_passes = [
             [
@@ -157,13 +160,187 @@ def get_period_traction_report_data(start_date: datetime, end_date: datetime) ->
             for c in contact_rows
         ]
 
+        # Product sales recorded via the POS cart or the Edit Allocation modal
+        sale_rows = session.exec(
+            select(ProductSale)
+            .where(
+                ProductSale.sold_at >= start_date,
+                ProductSale.sold_at <= end_date,
+            )
+            .order_by(ProductSale.sold_at)
+        ).all()
+        product_sales = [
+            [
+                str(ps.id),
+                ps.sold_at.strftime("%Y-%m-%d %H:%M"),
+                str(ps.transaction_id),
+                ps.item_name,
+                str(
+                    int(ps.quantity) if ps.quantity == int(ps.quantity) else ps.quantity
+                ),
+                f"${ps.unit_price:.2f}",
+                f"${ps.unit_price * ps.quantity:.2f}",
+            ]
+            for ps in sale_rows
+        ]
+
     return {
         "memberships": memberships,
         "day_passes": day_passes,
         "consumables": consumables,
         "sign_ins": sign_ins,
         "community_contacts": community_contacts,
+        "product_sales": product_sales,
     }
+
+
+def get_products_services_report_data(start_date: datetime, end_date: datetime) -> list:
+    """Returns multi-section report data covering all products and services sold
+    in the given date range.
+
+    Sections returned:
+      Transactions   — all completed/cash/local SquareTransaction records
+      Product Sales  — inventory items sold via POS or Edit Allocation
+      Day Passes     — day pass activations during the period
+      Memberships    — membership periods that started during the period
+
+    Each section is a dict with 'title', 'headers', 'rows' compatible with
+    the multi-section CSV and PDF exporters.
+    """
+    completed_statuses = ("completed", "cash", "cash_square", "local")
+
+    with Session(engine) as session:
+        txn_rows_raw = session.exec(
+            select(SquareTransaction)
+            .where(
+                SquareTransaction.created_at >= start_date,
+                SquareTransaction.created_at <= end_date,
+                SquareTransaction.square_status.in_(completed_statuses),
+            )
+            .order_by(SquareTransaction.created_at)
+        ).all()
+        txn_rows = [
+            [
+                str(t.id),
+                t.created_at.strftime("%Y-%m-%d %H:%M"),
+                t.customer_name or "",
+                f"${t.amount:.2f}",
+                t.description or "",
+                t.square_status,
+                t.processed_by or "",
+            ]
+            for t in txn_rows_raw
+        ]
+
+        sale_rows_raw = session.exec(
+            select(ProductSale)
+            .where(
+                ProductSale.sold_at >= start_date,
+                ProductSale.sold_at <= end_date,
+            )
+            .order_by(ProductSale.sold_at)
+        ).all()
+        product_rows = [
+            [
+                str(ps.id),
+                ps.sold_at.strftime("%Y-%m-%d %H:%M"),
+                str(ps.transaction_id),
+                ps.item_name,
+                str(
+                    int(ps.quantity) if ps.quantity == int(ps.quantity) else ps.quantity
+                ),
+                f"${ps.unit_price:.2f}",
+                f"${ps.unit_price * ps.quantity:.2f}",
+            ]
+            for ps in sale_rows_raw
+        ]
+
+        dp_pairs = session.exec(
+            select(DayPass, User)
+            .join(User, DayPass.user_account_number == User.account_number)
+            .where(
+                DayPass.date >= start_date,
+                DayPass.date <= end_date,
+            )
+            .order_by(DayPass.date)
+        ).all()
+        daypass_rows = [
+            [
+                str(dp.id),
+                dp.date.strftime("%Y-%m-%d"),
+                str(u.account_number),
+                f"{u.first_name} {u.last_name}",
+                dp.description or "",
+            ]
+            for dp, u in dp_pairs
+        ]
+
+        mem_pairs = session.exec(
+            select(ActiveMembership, User)
+            .join(User, ActiveMembership.user_account_number == User.account_number)
+            .where(
+                ActiveMembership.start_date >= start_date,
+                ActiveMembership.start_date <= end_date,
+            )
+            .order_by(ActiveMembership.start_date)
+        ).all()
+        membership_rows = [
+            [
+                str(m.id),
+                m.start_date.strftime("%Y-%m-%d"),
+                m.end_date.strftime("%Y-%m-%d"),
+                str(u.account_number),
+                f"{u.first_name} {u.last_name}",
+                m.description or "",
+            ]
+            for m, u in mem_pairs
+        ]
+
+    return [
+        {
+            "title": "Transactions",
+            "headers": [
+                "ID",
+                "Date",
+                "Customer",
+                "Amount",
+                "Description",
+                "Status",
+                "Processed By",
+            ],
+            "rows": txn_rows,
+        },
+        {
+            "title": "Product Sales",
+            "headers": [
+                "Sale ID",
+                "Date",
+                "Transaction ID",
+                "Item",
+                "Qty",
+                "Unit Price",
+                "Total",
+            ],
+            "rows": product_rows,
+        },
+        {
+            "title": "Day Passes",
+            "headers": ["ID", "Date", "Account", "Name", "Description"],
+            "rows": daypass_rows,
+        },
+        {
+            "title": "Memberships",
+            "headers": [
+                "ID",
+                "Start Date",
+                "End Date",
+                "Account",
+                "Name",
+                "Description",
+            ],
+            "rows": membership_rows,
+        },
+    ]
 
 
 # --- Everything People Export ---
@@ -278,10 +455,9 @@ def get_everything_people_data() -> list[dict]:
 
         # Day passes with linked user name
         dp_rows_raw = session.exec(
-            select(UserCredits, User)
-            .join(User, UserCredits.user_account_number == User.account_number)
-            .where(UserCredits.credit_debit == "daypass")
-            .order_by(User.last_name, UserCredits.date)
+            select(DayPass, User)
+            .join(User, DayPass.user_account_number == User.account_number)
+            .order_by(User.last_name, DayPass.date)
         ).all()
         dp_rows = [
             [
@@ -362,6 +538,46 @@ def get_everything_people_data() -> list[dict]:
                 f.admin_response or "",
             ]
             for f in feedback
+        ]
+
+        # All Square/POS financial transactions ordered by date
+        txn_rows_raw = session.exec(
+            select(SquareTransaction).order_by(SquareTransaction.created_at)
+        ).all()
+        txn_rows = [
+            [
+                str(t.id),
+                t.created_at.strftime("%Y-%m-%d %H:%M"),
+                t.customer_name or "",
+                t.customer_email or "",
+                t.customer_phone or "",
+                f"${t.amount:.2f}",
+                t.description or "",
+                t.square_status or "",
+                "Yes" if t.is_local else "No",
+                t.processed_by or "",
+                t.refund_status or "",
+            ]
+            for t in txn_rows_raw
+        ]
+
+        # Product sales recorded via POS cart or Edit Allocation
+        sale_rows_raw = session.exec(
+            select(ProductSale).order_by(ProductSale.sold_at)
+        ).all()
+        sale_rows = [
+            [
+                str(ps.id),
+                ps.sold_at.strftime("%Y-%m-%d %H:%M"),
+                str(ps.transaction_id),
+                ps.item_name,
+                str(
+                    int(ps.quantity) if ps.quantity == int(ps.quantity) else ps.quantity
+                ),
+                f"${ps.unit_price:.2f}",
+                f"${ps.unit_price * ps.quantity:.2f}",
+            ]
+            for ps in sale_rows_raw
         ]
 
     return [
@@ -479,6 +695,36 @@ def get_everything_people_data() -> list[dict]:
             ],
             "rows": feedback_rows,
         },
+        {
+            "title": "Transactions",
+            "headers": [
+                "ID",
+                "Date",
+                "Customer Name",
+                "Email",
+                "Phone",
+                "Amount",
+                "Description",
+                "Status",
+                "Local",
+                "Processed By",
+                "Refund Status",
+            ],
+            "rows": txn_rows,
+        },
+        {
+            "title": "Product Sales",
+            "headers": [
+                "Sale ID",
+                "Date",
+                "Transaction ID",
+                "Item",
+                "Qty",
+                "Unit Price",
+                "Total",
+            ],
+            "rows": sale_rows,
+        },
     ]
 
 
@@ -540,9 +786,7 @@ def build_daily_report_data() -> dict:
         ).all()
 
         day_passes_raw = session.exec(
-            select(UserCredits)
-            .where(UserCredits.credit_debit == "daypass")
-            .where(UserCredits.date >= window_start)
+            select(DayPass).where(DayPass.date >= window_start)
         ).all()
 
         transactions_raw = session.exec(
@@ -576,6 +820,30 @@ def build_daily_report_data() -> dict:
             .order_by(desc(SquareTransaction.created_at))
         ).all()
 
+        # Collect names of all membership tiers priced at $0 so we can identify
+        # free promotional memberships by matching the description field on activation.
+        free_tier_names = {
+            t.name
+            for t in session.exec(
+                select(ProductTier).where(
+                    ProductTier.tier_type == "membership",
+                    ProductTier.price == 0.0,
+                )
+            ).all()
+        }
+
+        # Memberships started in the window whose description matches a free tier.
+        free_memberships_raw = (
+            session.exec(
+                select(ActiveMembership).where(
+                    ActiveMembership.start_date >= window_start,
+                    ActiveMembership.description.in_(free_tier_names),
+                )
+            ).all()
+            if free_tier_names
+            else []
+        )
+
     # --- Bucket records by calendar date ---
     nm_by_day: dict = defaultdict(int)
     for u in new_members_raw:
@@ -605,6 +873,10 @@ def build_daily_report_data() -> dict:
     for c in contacts_raw:
         cc_by_day[c.visited_at.date()] += 1
 
+    fm_by_day: dict = defaultdict(int)
+    for m in free_memberships_raw:
+        fm_by_day[m.start_date.date()] += 1
+
     # --- Build the per-day list ---
     days = [
         {
@@ -615,6 +887,7 @@ def build_daily_report_data() -> dict:
             "volunteers": vol_by_day[d],
             "day_passes": dp_by_day[d],
             "transactions": tx_by_day[d],
+            "free_memberships": fm_by_day[d],
             "community_contacts": cc_by_day[d],
         }
         for d in day_dates
@@ -635,9 +908,11 @@ def build_daily_report_data() -> dict:
         for c in contacts_raw
     ]
 
-    # --- Recent Square/POS transactions for the period (newest first) ---
-    recent_transactions_detail = [
-        {
+    # Split transactions into past 24 hours and past 7 days for separate tables.
+    cutoff_24h = now - timedelta(hours=24)
+
+    def _format_txn(t):
+        return {
             "date": t.created_at.strftime("%Y-%m-%d %H:%M"),
             "customer_name": t.customer_name or "",
             "amount": f"${t.amount:.2f}",
@@ -653,8 +928,11 @@ def build_daily_report_data() -> dict:
                 else "Square"
             ),
         }
-        for t in square_txns_raw
+
+    transactions_24h = [
+        _format_txn(t) for t in square_txns_raw if t.created_at >= cutoff_24h
     ]
+    transactions_7d = [_format_txn(t) for t in square_txns_raw]
 
     return {
         "hackspace_name": get_setting("hackspace_name", "Hackspace"),
@@ -663,7 +941,8 @@ def build_daily_report_data() -> dict:
         "pending_approvals": int(pending_count),
         "days": days,
         "community_contacts_detail": community_contacts_detail,
-        "recent_transactions_detail": recent_transactions_detail,
+        "transactions_24h": transactions_24h,
+        "transactions_7d": transactions_7d,
     }
 
 

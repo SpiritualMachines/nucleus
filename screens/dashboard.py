@@ -3,55 +3,43 @@ from functools import partial
 
 from textual import events
 from textual.app import ComposeResult
-from textual.containers import Center, Horizontal, Vertical, VerticalScroll
+from textual.containers import Center, Horizontal, Vertical
 from textual.screen import Screen
 from textual.widgets import (
     Button,
     Checkbox,
-    Collapsible,
     DataTable,
     Footer,
     Header,
     Input,
     Label,
     Select,
+    Static,
     TabbedContent,
     TabPane,
 )
 
 from core import exporters, models, services, square_service
-from core.email_service import send_transaction_receipt
-from core.config import settings
 from core.security import verify_password
-from screens.dashboard_modals import (
-    ActivateSubscriptionModal,
-    AddDayPassModal,
-    AddMembershipModal,
+from screens.modals import (
     CommunityContactsReportModal,
     ConfirmSignOutScreen,
-    DayPassHistoryModal,
     FeedbackViewModal,
-    ManageMembershipsModal,
     MemberActionModal,
     PeriodTractionReportModal,
     PeriodTransactionReportModal,
     PostActionCountdownModal,
+    ProductSalesReportModal,
     SelectVisitTypeModal,
-    StorageAssignModal,
-    StorageEditModal,
-    StorageViewModal,
-    TransactionModal,
-    ViewCreditsModal,
-    RefundConfirmModal,
-    VISIT_TYPES,
 )
 from screens.directory_select import DirectorySelectScreen
 from screens.edit_profile import ChangePasswordScreen, EditProfileScreen
+from screens.mixins import MembersMixin, POSMixin, StorageMixin
 from screens.registration import RegisterScreen
 from screens.settings_screen import SettingsScreen
 
 
-class Dashboard(Screen):
+class Dashboard(Screen, POSMixin, MembersMixin, StorageMixin):
     CSS_PATH = "../theme/dashboard.tcss"
 
     # SQL preset queries for the Database tab quick-load buttons
@@ -122,18 +110,17 @@ class Dashboard(Screen):
             "cursor_type": "row",
         },
         {
-            "id": "pos_txns_table",
+            "id": "all_txns_table",
             "columns": [
-                ("ID", 5),
+                ("ID", 6),
                 ("Date", 18),
-                ("Customer", 18),
+                ("Customer", 20),
                 ("Amount", 10),
-                ("Description", 24),
+                ("Type", 12),
+                ("Description", 26),
                 ("Status", 12),
-                ("Via", 8),
+                ("Via", 12),
                 ("Processed By", 16),
-                ("Refunded By", 16),
-                ("Refund Reason", 22),
             ],
             "cursor_type": "row",
         },
@@ -200,6 +187,28 @@ class Dashboard(Screen):
     _inv_selected_cart_key: str = None  # row key of selected cart row
     _manual_entry_counter: int = 0  # increments to give each manual entry a unique key
 
+    def action_open_website(self) -> None:
+        """Opens the Spiritual Machines project website in the default browser."""
+        import webbrowser
+
+        webbrowser.open("https://spiritualmachines.ca")
+
+    def action_open_manual(self) -> None:
+        """Opens the Nucleus user manual on GitHub in the default browser."""
+        import webbrowser
+
+        webbrowser.open(
+            "https://github.com/SpiritualMachines/nucleus/blob/main/USER_MANUAL.md"
+        )
+
+    def action_open_changelog(self) -> None:
+        """Opens the Nucleus changelog on GitHub in the default browser."""
+        import webbrowser
+
+        webbrowser.open(
+            "https://github.com/SpiritualMachines/nucleus/blob/main/CHANGELOG.md"
+        )
+
     def compose(self) -> ComposeResult:
         user = self.app.current_user
         currency = services.get_setting("app_currency_name", "Credits")
@@ -223,6 +232,19 @@ class Dashboard(Screen):
 
         yield Header(show_clock=True)
 
+        with Horizontal(id="top_bar"):
+            yield Static(
+                "[@click=screen.open_website]A Spiritual Machines Project[/]"
+                "    |    "
+                "[@click=screen.open_manual]View User Manual[/]"
+                "    |    "
+                "[@click=screen.open_changelog]View Change Log[/]"
+                "    (Link May Open Under App)",
+                id="link_bar",
+                markup=True,
+            )
+            yield Static(f"Auto-logout: {self.AUTO_LOGOUT_SECONDS}s", id="logout_timer")
+
         yield Label("", id="pending_alert", classes="hidden")
 
         with TabbedContent():
@@ -235,6 +257,10 @@ class Dashboard(Screen):
 
             with TabPane("Purchases"):
                 yield from self._compose_purchases_tab(user, currency)
+
+            if user.role in [models.UserRole.STAFF, models.UserRole.ADMIN]:
+                with TabPane("Transactions"):
+                    yield from self._compose_transactions_tab()
 
             if user.role in [models.UserRole.STAFF, models.UserRole.ADMIN]:
                 with TabPane("Reports"):
@@ -255,319 +281,7 @@ class Dashboard(Screen):
             with TabPane("Feedback"):
                 yield from self._compose_feedback_tab(user)
 
-        # Security Timer Label -- docked above footer
-        yield Label(f"Auto-logout: {self.AUTO_LOGOUT_SECONDS}s", id="logout_timer")
         yield Footer()
-
-    def _compose_profile_tab(self, user, currency) -> ComposeResult:
-        """Yields widgets for the My Profile tab."""
-        # Safe role access (handles both Enum and String cases)
-        role_val = user.role.value if hasattr(user.role, "value") else str(user.role)
-        role_name = user.role.name if hasattr(user.role, "name") else str(user.role)
-
-        yield Label(
-            f"Welcome, {role_val.title()} {user.first_name}!",
-            classes="title",
-            id="welcome_lbl",
-        )
-        yield Label(f"Account Type: {role_name}", id="lbl_role")
-        yield Label(f"Account #: {user.account_number}", id="lbl_acct")
-        yield Label("Credit Balance: $0.00", id="lbl_balance")
-
-        with Horizontal(classes="filter-row"):
-            yield Button("Edit My Information", id="edit_profile_btn")
-            yield Button("Change Password", id="change_pwd_btn")
-        with Horizontal(classes="filter-row"):
-            # Label updated on mount by update_signin_button
-            yield Button("Sign In to Makerspace", id="signin_btn")
-            yield Button("Logout", id="logout_btn")
-
-        yield Label("My Preferences", classes="subtitle")
-
-        yield Label("Preferred Visit Type (leave blank to always be asked):")
-        yield Select(
-            [("No preference (always ask)", "")] + [(vt, vt) for vt in VISIT_TYPES],
-            id="pref_visit_type",
-            value="",
-        )
-
-        yield Button("Save Preferences", id="btn_save_prefs")
-
-    def _compose_staff_tools_tab(self, user) -> ComposeResult:
-        """Yields widgets for the Staff Tools tab."""
-        with Vertical(classes="management-section"):
-            yield Label("User Management", classes="title")
-            yield Button("Register New Member (In-Person)", id="btn_staff_reg")
-
-        # Quick User Search
-        with Vertical(classes="management-section"):
-            yield Label("Quick User Search / Manage", classes="subtitle")
-            yield Label("Search for a user to open their management menu:")
-
-            with Horizontal(classes="search-row"):
-                yield Input(
-                    placeholder="Name or Email...",
-                    id="staff_user_search_input",
-                )
-                yield Button("Search", id="btn_staff_user_search")
-
-            yield DataTable(id="staff_user_search_table")
-
-        with Vertical(classes="pending-section"):
-            yield Label("Pending Approvals", classes="title")
-            yield DataTable(id="pending_table")
-            yield Label("Select a row, then click Approve.", classes="subtitle")
-
-            # Stacked buttons
-            with Vertical(classes="pending-buttons"):
-                yield Button(
-                    "Approve Selected Account",
-                    variant="success",
-                    id="approve_btn",
-                )
-                yield Button("Refresh List", id="refresh_pending")
-
-    def _compose_purchases_tab(self, user, currency) -> ComposeResult:
-        """Yields widgets for the Purchases tab."""
-        with VerticalScroll():
-            yield Label("Purchases", classes="title")
-
-            # === STAFF / ADMIN VIEW ===
-            if user.role in [models.UserRole.STAFF, models.UserRole.ADMIN]:
-                # Subsection 0: Manual Transaction (Point of Sale)
-                with Vertical(classes="purchase-section"):
-                    pos_cfg = square_service.get_pos_config()
-                    pos_btn_label = (
-                        "Send to Square Terminal"
-                        if pos_cfg.square_enabled
-                        else "Record Transaction"
-                    )
-                    yield Label("Manual Transaction", classes="subtitle")
-
-                    # Step 1: Inventory Cart
-                    with Collapsible(title="Step 1: Select Items (Optional)", collapsed=True):
-                        yield Label(
-                            "Click an item row to select it, set the quantity,"
-                            " then click Add to Cart."
-                            " Amount and Description are auto-filled."
-                        )
-                        yield DataTable(id="inv_available_table")
-                        with Horizontal(classes="filter-row"):
-                            yield Label("Quantity:")
-                            yield Input("1", id="inv_qty", type="number")
-                            yield Button(
-                                "Add to Cart",
-                                variant="primary",
-                                id="btn_add_to_cart",
-                            )
-                        yield Label("Cart:", classes="subtitle")
-                        yield DataTable(id="inv_cart_table")
-                        with Horizontal(classes="filter-row"):
-                            yield Label("Cart Total: $0.00", id="inv_cart_total_lbl")
-                            yield Button(
-                                "Remove Selected",
-                                variant="error",
-                                id="btn_remove_from_cart",
-                                disabled=True,
-                            )
-                            yield Button("Clear Cart", id="btn_clear_cart")
-
-                    # Step 2: Add a custom line item not in the inventory list
-                    with Collapsible(title="Step 2: Add Custom Item (Optional)", collapsed=True):
-                        yield Label(
-                            "Add charges not covered by the inventory above,"
-                            " e.g. a workshop fee or donation."
-                        )
-                        yield Label("Item Name / Description:")
-                        yield Input(
-                            placeholder="e.g. Workshop fee, Donation",
-                            id="pos_manual_desc",
-                        )
-                        yield Label("Price ($):")
-                        yield Input(
-                            placeholder="0.00",
-                            id="pos_manual_price",
-                            type="number",
-                        )
-                        with Horizontal(classes="filter-row"):
-                            yield Button(
-                                "Add Custom Item",
-                                variant="primary",
-                                id="btn_add_manual_to_cart",
-                            )
-
-                    # Step 3: Customer Details
-                    with Collapsible(title="Step 3: Customer Details", collapsed=True):
-                        yield Label(
-                            "Search for an existing user to auto-fill, or"
-                            " enter details manually:"
-                        )
-                        with Horizontal(classes="search-row"):
-                            yield Input(
-                                placeholder="Search by name or email...",
-                                id="pos_customer_search_input",
-                            )
-                            yield Button(
-                                "Search",
-                                id="btn_pos_customer_search",
-                            )
-                        yield DataTable(id="pos_customer_search_table")
-
-                        yield Label("Customer Name:")
-                        yield Input(
-                            placeholder="First and Last Name",
-                            id="pos_customer_name",
-                        )
-                        yield Label(
-                            "Customer Email (required to send a receipt for cash transactions):"
-                        )
-                        yield Input(
-                            placeholder="customer@example.com",
-                            id="pos_customer_email",
-                        )
-                        yield Label("Customer Phone (optional):")
-                        yield Input(
-                            placeholder="Phone number",
-                            id="pos_customer_phone",
-                        )
-
-                    with Horizontal(classes="filter-row"):
-                        yield Button(
-                            pos_btn_label,
-                            variant="success",
-                            id="btn_process_manual_txn",
-                        )
-                        yield Button(
-                            "Record Cash Transaction",
-                            variant="warning",
-                            id="btn_record_cash_txn",
-                        )
-                        yield Button(
-                            "Clear Form",
-                            id="btn_clear_pos_form",
-                        )
-
-                    with Collapsible(title="Recent Transactions", collapsed=True):
-                        yield DataTable(id="pos_txns_table")
-                        with Horizontal(classes="filter-row"):
-                            yield Button(
-                                "Refresh",
-                                id="btn_refresh_pos_txns",
-                            )
-                            yield Button(
-                                "Check Terminal Status",
-                                variant="primary",
-                                id="btn_check_pos_status",
-                                disabled=True,
-                            )
-                            yield Button(
-                                "Issue Refund",
-                                variant="error",
-                                id="btn_issue_refund",
-                                disabled=True,
-                            )
-
-                # Subsection 1: Existing User Transactions (consolidated)
-                with Collapsible(title="Membership Transactions", collapsed=True, classes="purchase-section"):
-                    yield Label(
-                        "Search for a user to manage their memberships, day passes, and credits:"
-                    )
-                    with Horizontal(classes="search-row"):
-                        yield Input(
-                            placeholder="Name or Email...",
-                            id="user_search_input",
-                        )
-                        yield Button("Search", id="btn_user_search")
-                    yield DataTable(id="user_search_table")
-                    yield Label("Actions for Selected User:", classes="subtitle")
-                    yield Label(
-                        "Search for a user above to enable actions.",
-                        classes="text-muted",
-                        id="lbl_no_user_hint",
-                    )
-                    # Row 1: Membership actions
-                    with Horizontal(classes="filter-row"):
-                        yield Button(
-                            "Add Membership",
-                            variant="success",
-                            id="btn_add_mem",
-                            disabled=True,
-                        )
-                        yield Button(
-                            "Edit Memberships",
-                            variant="primary",
-                            id="btn_edit_mem",
-                            disabled=True,
-                        )
-                    # Row 2: Day Pass actions
-                    with Horizontal(classes="filter-row"):
-                        yield Button(
-                            "Add Day Pass",
-                            variant="success",
-                            id="btn_add_daypass",
-                            disabled=True,
-                        )
-                        yield Button(
-                            "View Day Passes",
-                            variant="primary",
-                            id="btn_view_daypass",
-                            disabled=True,
-                        )
-                    # Row 3: Credits actions
-                    with Horizontal(classes="filter-row"):
-                        yield Button(
-                            f"Add {currency} (+)",
-                            variant="success",
-                            id="btn_credit",
-                            disabled=True,
-                        )
-                        yield Button(
-                            f"Deduct {currency} (-)",
-                            variant="error",
-                            id="btn_debit",
-                            disabled=True,
-                        )
-                        yield Button(
-                            f"View {currency}",
-                            variant="primary",
-                            id="btn_view_credits",
-                            disabled=True,
-                        )
-                    # Row 4: Square subscription actions
-                    with Horizontal(classes="filter-row"):
-                        yield Button(
-                            "Activate Square Membership Subscription",
-                            variant="success",
-                            id="btn_activate_subscription",
-                            disabled=True,
-                        )
-                        yield Button(
-                            "Cancel Subscription",
-                            variant="error",
-                            id="btn_cancel_subscription",
-                            disabled=True,
-                        )
-                        yield Button(
-                            "Poll Subscription Status",
-                            variant="primary",
-                            id="btn_poll_subscription",
-                            disabled=True,
-                        )
-
-            # === REGULAR USER VIEW ===
-            else:
-                # Subsection 1: My Memberships
-                with Collapsible(title="My Memberships", collapsed=False, classes="purchase-section"):
-                    yield DataTable(id="my_mem_table")
-
-                # Subsection 2: My Day Passes
-                with Collapsible(title="My Day Passes", collapsed=False, classes="purchase-section"):
-                    yield DataTable(id="my_daypass_table")
-
-                # Subsection 3: My Consumables
-                with Collapsible(title=f"My {currency} Ledger", collapsed=False, classes="purchase-section"):
-                    yield Label(f"{currency} Balance: $0.00", id="my_balance_lbl")
-                    yield DataTable(id="my_cons_table")
 
     def _compose_reports_tab(self) -> ComposeResult:
         """Yields widgets for the Reports tab."""
@@ -606,43 +320,10 @@ class Dashboard(Screen):
             "Export Everything People CSV Report",
             id="btn_everything_people_csv",
         )
-
-    def _compose_storage_tab(self) -> ComposeResult:
-        """Yields widgets for the Storage tab."""
-        with VerticalScroll():
-            yield Label("Member Storage", classes="title")
-
-            # Active storage assignments
-            yield Label("Active Storage Assignments", classes="subtitle")
-            yield DataTable(id="storage_active_table")
-            with Horizontal(classes="filter-row"):
-                yield Button(
-                    "Assign Storage",
-                    variant="success",
-                    id="btn_storage_assign",
-                )
-                yield Button(
-                    "View Selected",
-                    id="btn_storage_view",
-                    disabled=True,
-                )
-                yield Button(
-                    "Edit Selected",
-                    variant="primary",
-                    id="btn_storage_edit",
-                    disabled=True,
-                )
-                yield Button(
-                    "Remove Selected (Archive)",
-                    variant="error",
-                    id="btn_storage_archive",
-                    disabled=True,
-                )
-                yield Button("Refresh", id="btn_storage_refresh")
-
-            # Archived storage assignments
-            yield Label("Archived Storage Assignments", classes="subtitle")
-            yield DataTable(id="storage_archived_table")
+        yield Button(
+            "Export Products / Services Sales Report",
+            id="btn_product_sales_report",
+        )
 
     def _compose_database_tab(self) -> ComposeResult:
         """Yields widgets for the Database tab."""
@@ -838,6 +519,9 @@ class Dashboard(Screen):
             "btn_community_contacts_report": lambda: self.app.push_screen(
                 CommunityContactsReportModal()
             ),
+            "btn_product_sales_report": lambda: self.app.push_screen(
+                ProductSalesReportModal()
+            ),
             "btn_everything_people_csv": self.initiate_everything_people_csv,
             # Unified user search
             "btn_user_search": self.action_search_users,
@@ -861,9 +545,11 @@ class Dashboard(Screen):
             "btn_process_manual_txn": self.process_manual_transaction,
             "btn_record_cash_txn": self.record_cash_transaction,
             "btn_clear_pos_form": self.clear_pos_form,
-            "btn_refresh_pos_txns": self.load_pos_transactions,
-            "btn_check_pos_status": self.check_pos_terminal_status,
-            "btn_issue_refund": self._handle_issue_refund,
+            "btn_refresh_all_txns": self._load_all_transactions,
+            "btn_check_txn_status": self.check_pos_terminal_status,
+            "btn_issue_refund_txn": self._handle_issue_refund,
+            "btn_edit_txn_details": self._handle_edit_txn_details,
+            "btn_edit_txn_allocation": self._handle_edit_txn_allocation,
         }
 
     # --- Small handler methods extracted from on_button_pressed inline logic ---
@@ -893,96 +579,6 @@ class Dashboard(Screen):
                     )
         except ValueError as e:
             self.app.notify(str(e), severity="error")
-
-    def _handle_refresh_pending(self):
-        """Refreshes the pending approvals list and alert banner."""
-        self.load_pending()
-        self.update_pending_alert()
-
-    def _handle_approve(self):
-        """Approves the currently selected pending user account."""
-        table = self.query_one("#pending_table")
-        try:
-            row_key = table.coordinate_to_cell_key(table.cursor_coordinate).row_key
-            row_data = table.get_row(row_key)
-            acct_num = int(row_data[0])
-            services.approve_user(self.app.current_user.account_number, acct_num)
-            self.app.notify(f"Approved User {acct_num}")
-            self.load_pending()
-            self.update_pending_alert()
-        except Exception:
-            self.app.notify("Select a user first", severity="warning")
-
-    def _handle_add_mem(self):
-        """Opens the Add Membership modal for the selected user."""
-        if self.selected_user_acct:
-            self.app.push_screen(
-                AddMembershipModal(self.selected_user_acct),
-                self._refresh_user_table,
-            )
-
-    def _handle_edit_mem(self):
-        """Opens the Manage Memberships modal for the selected user."""
-        if self.selected_user_acct:
-            self.app.push_screen(ManageMembershipsModal(self.selected_user_acct))
-
-    def _handle_add_daypass(self):
-        """Opens the Add Day Pass modal for the selected user."""
-        if self.selected_user_acct:
-            self.app.push_screen(
-                AddDayPassModal(self.selected_user_acct), self._refresh_user_table
-            )
-
-    def _handle_view_daypass(self):
-        """Opens the Day Pass History modal for the selected user."""
-        if self.selected_user_acct:
-            self.app.push_screen(DayPassHistoryModal(self.selected_user_acct))
-
-    def _handle_credit(self):
-        """Opens the credit transaction modal for the selected user."""
-        if self.selected_user_acct:
-            currency = services.get_setting("app_currency_name", "Credits")
-            self.app.push_screen(
-                TransactionModal(self.selected_user_acct, "credit", currency),
-                self._refresh_user_table,
-            )
-
-    def _handle_debit(self):
-        """Opens the debit transaction modal for the selected user."""
-        if self.selected_user_acct:
-            currency = services.get_setting("app_currency_name", "Credits")
-            self.app.push_screen(
-                TransactionModal(self.selected_user_acct, "debit", currency),
-                self._refresh_user_table,
-            )
-
-    def _handle_view_credits(self):
-        """Opens the View Credits modal for the selected user."""
-        if self.selected_user_acct:
-            currency = services.get_setting("app_currency_name", "Credits")
-            self.app.push_screen(ViewCreditsModal(self.selected_user_acct, currency))
-
-    def _handle_activate_subscription(self):
-        """Opens the Activate Subscription modal for the selected user."""
-        if self.selected_user_acct:
-            self.app.push_screen(
-                ActivateSubscriptionModal(self.selected_user_acct),
-                self._refresh_user_table,
-            )
-
-    def _handle_cancel_subscription(self):
-        """Cancels the Square subscription for the selected user."""
-        if self.selected_user_acct:
-            ok, msg = square_service.cancel_square_subscription(self.selected_user_acct)
-            severity = "information" if ok else "error"
-            self.app.notify(msg, severity=severity)
-
-    def _handle_poll_subscription(self):
-        """Polls the Square subscription status for the selected user."""
-        if self.selected_user_acct:
-            ok, msg = square_service.poll_member_subscription(self.selected_user_acct)
-            severity = "information" if ok else "error"
-            self.app.notify(msg, severity=severity)
 
     def on_mount(self):
         user = self.app.current_user
@@ -1020,7 +616,7 @@ class Dashboard(Screen):
 
         # Permissions check for Staff/Admin data loading
         if user.role in [models.UserRole.STAFF, models.UserRole.ADMIN]:
-            self.load_pos_transactions()
+            self._load_all_transactions()
             self._load_inv_available_table()
             self.load_storage_assignments()
 
@@ -1048,44 +644,6 @@ class Dashboard(Screen):
             self.query_one("#pref_visit_type", Select).value = pref_visit
         except Exception:
             pass
-
-    def init_user_purchases_view(self, acct_num: int):
-        """Loads data for the standard user purchases view."""
-        # 1. Memberships
-        mem_table = self.query_one("#my_mem_table", DataTable)
-        if mem_table:
-            mem_table.add_columns("Start Date", "End Date")
-            mems = services.get_user_memberships(acct_num)
-            for m in mems:
-                mem_table.add_row(
-                    m.start_date.strftime("%Y-%m-%d"), m.end_date.strftime("%Y-%m-%d")
-                )
-
-        # 2. Day Passes
-        dp_table = self.query_one("#my_daypass_table", DataTable)
-        if dp_table:
-            dp_table.add_columns("Date", "Description")
-            passes = services.get_user_day_passes(acct_num)
-            for p in passes:
-                dp_table.add_row(p.date.strftime("%Y-%m-%d"), p.description)
-
-        # 3. Consumables
-        cons_table = self.query_one("#my_cons_table", DataTable)
-        if cons_table:
-            cons_table.add_columns("Date", "Type", "Amount", "Description")
-            txns = services.get_user_transactions(acct_num)
-            for t in txns:
-                cons_table.add_row(
-                    t.date.strftime("%Y-%m-%d"),
-                    t.credit_debit.title(),
-                    f"${t.credits:.2f}",
-                    t.description or "",
-                )
-
-        # Update Balance Label
-        balance = services.get_user_balance(acct_num)
-        currency = services.get_setting("app_currency_name", "Credits")
-        self.query_one("#my_balance_lbl").update(f"{currency} Balance: ${balance:.2f}")
 
     # ... Inactivity Trackers ...
     def reset_activity(self):
@@ -1192,16 +750,26 @@ class Dashboard(Screen):
             self.query_one("#pos_customer_phone", Input).value = str(row_data[3])
             self.app.notify(f"Customer details filled: {row_data[1]}")
 
-        elif event.data_table.id == "pos_txns_table":
+        elif event.data_table.id == "all_txns_table":
             row_data = event.data_table.get_row(event.row_key)
-            self.selected_pos_txn_id = int(row_data[0])
-            # Only enable status check for Square transactions (not local records)
-            via = str(row_data[6])
-            self.query_one("#btn_check_pos_status").disabled = via != "Square"
-            # Disable refund if already refunded (Status column)
-            already_refunded = str(row_data[5]).strip().lower() == "refunded"
-            self.query_one("#btn_issue_refund").disabled = already_refunded
-            self.app.notify(f"Selected transaction #{self.selected_pos_txn_id}")
+            id_str = str(row_data[0])
+            if id_str.startswith("T"):
+                # SquareTransaction row -- all actions are available
+                self.selected_pos_txn_id = int(id_str[1:])
+                via = str(row_data[7])
+                self.query_one("#btn_check_txn_status").disabled = via != "Square"
+                already_refunded = str(row_data[6]).strip().lower() == "refunded"
+                self.query_one("#btn_issue_refund_txn").disabled = already_refunded
+                self.query_one("#btn_edit_txn_details").disabled = False
+                self.query_one("#btn_edit_txn_allocation").disabled = False
+            else:
+                # Daypass or membership row -- Square-specific actions not applicable
+                self.selected_pos_txn_id = None
+                self.query_one("#btn_check_txn_status").disabled = True
+                self.query_one("#btn_issue_refund_txn").disabled = True
+                self.query_one("#btn_edit_txn_details").disabled = True
+                self.query_one("#btn_edit_txn_allocation").disabled = True
+            self.app.notify(f"Selected transaction {id_str}")
 
         elif event.data_table.id == "inv_available_table":
             row_data = event.data_table.get_row(event.row_key)
@@ -1226,56 +794,19 @@ class Dashboard(Screen):
     def refresh_feedback_after_modal(self, result: bool = False):
         self.load_feedback()
 
-    def refresh_after_manage(self, result: bool = False):
-        if result:
-            self.load_members()
-
-    def refresh_profile(self, result: bool = False):
-        if result:
-            user = self.app.current_user
-
-            # Safe role access for refresh
-            role_val = (
-                user.role.value if hasattr(user.role, "value") else str(user.role)
-            )
-            role_name = user.role.name if hasattr(user.role, "name") else str(user.role)
-
-            self.query_one("#welcome_lbl").update(
-                f"Welcome, {role_val.title()} {user.first_name}!"
-            )
-            self.query_one("#lbl_role").update(f"Account Type: {role_name}")
-            self.query_one("#lbl_acct").update(f"Account #: {user.account_number}")
-            balance = services.get_user_balance(user.account_number)
-            currency = services.get_setting("app_currency_name", "Credits")
-            self.query_one("#lbl_balance").update(f"{currency} Balance: ${balance:.2f}")
-
-    def update_signin_button(self):
-        btn = self.query_one("#signin_btn", Button)
-        tag = (
-            services.get_setting("tag_name", settings.TAG_NAME)
-            or settings.TAG_NAME
-            or "Makerspace"
-        )
-        if services.is_user_signed_in(self.app.current_user.account_number):
-            btn.label = f"Sign Out of {tag}"
-            btn.variant = "warning"
-        else:
-            btn.label = f"Sign In to {tag}"
-            btn.variant = "success"
-
-    def update_pending_alert(self):
-        pending_count = len(services.get_pending_users())
-        alert = self.query_one("#pending_alert")
-
-        if pending_count > 0:
-            alert.update(
-                f"[!]  ACTION REQUIRED: {pending_count} User(s) Awaiting Approval"
-            )
-            alert.remove_class("hidden")
-            alert.add_class("warning-banner")
-        else:
-            alert.add_class("hidden")
-            alert.remove_class("warning-banner")
+    MEMBER_FILTER_CHECKBOXES = {
+        "chk_admin",
+        "chk_staff",
+        "chk_member",
+        "chk_community",
+        "chk_signed_in",
+    }
+    FEEDBACK_FILTER_CHECKBOXES = {
+        "chk_fb_general",
+        "chk_fb_feature",
+        "chk_fb_bug",
+        "chk_fb_urgent",
+    }
 
     def on_input_submitted(self, event: Input.Submitted):
         self.reset_activity()
@@ -1290,20 +821,6 @@ class Dashboard(Screen):
             self.action_staff_user_search()
         elif event.input.id == "pos_customer_search_input":
             self.action_pos_customer_search()
-
-    MEMBER_FILTER_CHECKBOXES = {
-        "chk_admin",
-        "chk_staff",
-        "chk_member",
-        "chk_community",
-        "chk_signed_in",
-    }
-    FEEDBACK_FILTER_CHECKBOXES = {
-        "chk_fb_general",
-        "chk_fb_feature",
-        "chk_fb_bug",
-        "chk_fb_urgent",
-    }
 
     def on_checkbox_changed(self, event: Checkbox.Changed) -> None:
         """Reload the relevant table whenever a filter checkbox is toggled."""
@@ -1325,84 +842,6 @@ class Dashboard(Screen):
         handler = self._dispatch.get(btn_id)
         if handler:
             handler()
-
-    def action_pos_customer_search(self):
-        """Search for existing users to auto-fill POS customer details."""
-        query = self.query_one("#pos_customer_search_input").value.strip()
-        table = self.query_one("#pos_customer_search_table", DataTable)
-        table.clear()
-
-        if not query:
-            self.app.notify("Please enter a search term.", severity="error")
-            return
-
-        results = services.search_users(query)
-        if not results:
-            self.app.notify("No users found.", severity="warning")
-            return
-
-        for u in results:
-            table.add_row(
-                str(u.account_number),
-                f"{u.first_name} {u.last_name}",
-                u.email,
-                u.phone or "",
-            )
-
-    def action_staff_user_search(self):
-        query = self.query_one("#staff_user_search_input").value.strip()
-        table = self.query_one("#staff_user_search_table", DataTable)
-        table.clear()
-
-        if not query:
-            self.app.notify("Please enter a search term.", severity="error")
-            return
-
-        results = services.search_users(query)
-        if not results:
-            self.app.notify("No users found.", severity="warning")
-            return
-
-        for u in results:
-            table.add_row(
-                str(u.account_number), f"{u.first_name} {u.last_name}", u.email
-            )
-
-    def action_search_users(self):
-        """Search for users for the unified Existing User Transactions section."""
-        query = self.query_one("#user_search_input").value.strip()
-        table = self.query_one("#user_search_table", DataTable)
-        table.clear()
-        self.selected_user_acct = None
-        for btn_id in (
-            "btn_add_mem",
-            "btn_edit_mem",
-            "btn_add_daypass",
-            "btn_view_daypass",
-            "btn_credit",
-            "btn_debit",
-            "btn_view_credits",
-            "btn_activate_subscription",
-            "btn_cancel_subscription",
-            "btn_poll_subscription",
-        ):
-            self.query_one(f"#{btn_id}").disabled = True
-        if not query:
-            self.app.notify("Please enter a search term.", severity="error")
-            return
-        results = services.search_users(query)
-        if not results:
-            self.app.notify("No users found.", severity="warning")
-            return
-        for u in results:
-            table.add_row(
-                str(u.account_number), f"{u.first_name} {u.last_name}", u.email
-            )
-
-    def _refresh_user_table(self, result: bool):
-        """Re-run the user search after any action that modifies user data."""
-        if result:
-            self.action_search_users()
 
     def verify_database_unlock(self):
         # Defence-in-depth: re-check the setting at unlock time in case it was changed
@@ -1510,262 +949,6 @@ class Dashboard(Screen):
             self.app.notify(f"Exported to: {path}")
         except Exception as e:
             self.app.notify(f"Export Failed: {str(e)}", severity="error")
-
-    # ---------------------------------------------------------------------------
-    # POS / Manual Transaction methods
-    # ---------------------------------------------------------------------------
-
-    def load_pos_transactions(self):
-        """
-        Refreshes any pending Square Terminal checkouts from the API, then loads
-        the 50 most recent SquareTransaction records into the POS table.
-
-        Refreshing before loading ensures that auto-cancelled checkouts (Square
-        cancels unattended terminals after ~5 minutes) are shown with the correct
-        status rather than remaining stuck on 'Pending' or 'In Progress'.
-        """
-        square_service.refresh_pending_transactions()
-        try:
-            table = self.query_one("#pos_txns_table", DataTable)
-        except Exception:
-            return
-        table.clear()
-        self.selected_pos_txn_id = None
-        try:
-            self.query_one("#btn_check_pos_status").disabled = True
-        except Exception:
-            pass
-        try:
-            self.query_one("#btn_issue_refund").disabled = True
-        except Exception:
-            pass
-
-        txns = square_service.get_recent_transactions(limit=50)
-        for t in txns:
-            # Determine the "Via" display based on payment method and status
-            if t.square_status == "cash_square":
-                via = "Cash (Square)"
-            elif t.square_status == "cash":
-                via = "Cash"
-            elif t.is_local:
-                via = "Local"
-            else:
-                via = "Square"
-            status = "Refunded" if t.refund_status == "refunded" else t.square_status.replace("_", " ").title()
-            table.add_row(
-                str(t.id),
-                t.created_at.strftime("%Y-%m-%d %H:%M"),
-                t.customer_name or "",
-                f"${t.amount:.2f}",
-                (t.description or "")[:24],
-                status,
-                via,
-                t.processed_by or "",
-                t.refunded_by or "",
-                (t.refund_reason or "")[:22],
-            )
-
-    def process_manual_transaction(self):
-        """
-        Reads the manual transaction form, validates inputs, and either sends a
-        checkout request to the Square Terminal or records a local transaction
-        depending on whether Square is enabled in POS settings.
-        """
-        if not self._cart:
-            self.app.notify(
-                "Cart is empty. Add items before processing.", severity="error"
-            )
-            return
-
-        try:
-            customer_name = self.query_one("#pos_customer_name", Input).value.strip()
-            customer_email = self.query_one("#pos_customer_email", Input).value.strip()
-            customer_phone = self.query_one("#pos_customer_phone", Input).value.strip()
-        except Exception as e:
-            self.app.notify(f"Form error: {e}", severity="error")
-            return
-
-        if not customer_name:
-            self.app.notify("Customer name is required.", severity="error")
-            return
-
-        amount = sum(e["qty"] * e["unit_price"] for e in self._cart)
-        desc_parts = [
-            f"{e['name']} x{int(e['qty']) if e['qty'] == int(e['qty']) else e['qty']}"
-            for e in self._cart
-        ]
-        description = ", ".join(desc_parts)
-
-        staff = self.app.current_user
-        staff_name = f"{staff.first_name} {staff.last_name}" if staff else None
-        ok, message, txn = square_service.process_terminal_checkout(
-            amount=amount,
-            customer_name=customer_name,
-            customer_email=customer_email or None,
-            customer_phone=customer_phone or None,
-            description=description or None,
-            processed_by=staff_name,
-        )
-
-        severity = "information" if ok else "error"
-        self.app.notify(message, severity=severity)
-
-        if txn:
-            # Only send a receipt when a real payment was submitted to Square.
-            # is_local=True means Square was disabled and nothing was actually
-            # charged -- the record is an audit placeholder, not a payment confirmation.
-            if ok and not txn.is_local and txn.customer_email:
-                try:
-                    hackspace_name = services.get_setting("hackspace_name", "Nucleus")
-                    sent = send_transaction_receipt(
-                        txn_id=txn.id,
-                        amount=txn.amount,
-                        customer_name=txn.customer_name,
-                        customer_email=txn.customer_email,
-                        description=txn.description or "",
-                        payment_method="Card (Square Terminal)",
-                        transaction_ref=txn.square_checkout_id or "",
-                        transaction_date=txn.created_at.strftime("%Y-%m-%d %H:%M"),
-                        subject_override=f"{hackspace_name} - Payment Submitted #{txn.id}",
-                    )
-                    if sent:
-                        self.app.notify(f"Receipt emailed to {txn.customer_email}.")
-                except Exception as exc:
-                    self.app.notify(f"Receipt email failed: {exc}", severity="warning")
-            self.clear_pos_form()
-            self.load_pos_transactions()
-
-    def record_cash_transaction(self):
-        """
-        Reads the manual transaction form and records a cash payment either to
-        Square (if enabled and configured) or locally. When recorded in Square,
-        the transaction appears in Square Dashboard so the bookkeeper only needs
-        to reconcile one system.
-        """
-        if not self._cart:
-            self.app.notify(
-                "Cart is empty. Add items before recording.", severity="error"
-            )
-            return
-
-        try:
-            customer_name = self.query_one("#pos_customer_name", Input).value.strip()
-            customer_email = self.query_one("#pos_customer_email", Input).value.strip()
-            customer_phone = self.query_one("#pos_customer_phone", Input).value.strip()
-        except Exception as e:
-            self.app.notify(f"Form error: {e}", severity="error")
-            return
-
-        if not customer_name:
-            self.app.notify("Customer name is required.", severity="error")
-            return
-
-        amount = sum(e["qty"] * e["unit_price"] for e in self._cart)
-        desc_parts = [
-            f"{e['name']} x{int(e['qty']) if e['qty'] == int(e['qty']) else e['qty']}"
-            for e in self._cart
-        ]
-        description = ", ".join(desc_parts)
-
-        staff = self.app.current_user
-        staff_name = f"{staff.first_name} {staff.last_name}" if staff else None
-        ok, message, txn = square_service.record_cash_payment(
-            amount=amount,
-            customer_name=customer_name,
-            customer_email=customer_email or None,
-            customer_phone=customer_phone or None,
-            description=description or None,
-            processed_by=staff_name,
-        )
-
-        severity = "information" if ok else "error"
-        self.app.notify(message, severity=severity)
-
-        if txn:
-            if ok and txn.customer_email:
-                try:
-                    sent = send_transaction_receipt(
-                        txn_id=txn.id,
-                        amount=txn.amount,
-                        customer_name=txn.customer_name,
-                        customer_email=txn.customer_email,
-                        description=txn.description or "",
-                        payment_method="Cash",
-                        transaction_ref=txn.square_checkout_id or "",
-                        transaction_date=txn.created_at.strftime("%Y-%m-%d %H:%M"),
-                    )
-                    if sent:
-                        self.app.notify(f"Receipt emailed to {txn.customer_email}.")
-                except Exception as exc:
-                    self.app.notify(f"Receipt email failed: {exc}", severity="warning")
-            self.clear_pos_form()
-            self.load_pos_transactions()
-
-    def clear_pos_form(self):
-        """Resets all manual transaction input fields and the inventory cart."""
-        for field_id in (
-            "pos_amount",
-            "pos_customer_name",
-            "pos_customer_email",
-            "pos_customer_phone",
-            "pos_description",
-            "pos_customer_search_input",
-        ):
-            try:
-                self.query_one(f"#{field_id}", Input).value = ""
-            except Exception:
-                pass
-        try:
-            self.query_one("#pos_customer_search_table", DataTable).clear()
-        except Exception:
-            pass
-        self.clear_cart()
-
-    def check_pos_terminal_status(self):
-        """
-        Queries Square for the current status of the selected transaction and
-        updates the local record. Only applicable to Square-processed transactions.
-        """
-        if not self.selected_pos_txn_id:
-            self.app.notify("Select a transaction row first.", severity="warning")
-            return
-        ok, message = square_service.update_transaction_status(self.selected_pos_txn_id)
-        severity = "information" if ok else "error"
-        self.app.notify(message, severity=severity)
-        if ok:
-            self.load_pos_transactions()
-
-    def _handle_issue_refund(self):
-        """
-        Opens the refund confirmation modal for the selected transaction.
-        On confirmation, processes the refund and refreshes the table.
-        """
-        if not self.selected_pos_txn_id:
-            self.app.notify("Select a transaction row first.", severity="warning")
-            return
-        txn = square_service.get_transaction_by_id(self.selected_pos_txn_id)
-        if not txn:
-            self.app.notify("Transaction not found.", severity="error")
-            return
-
-        def on_refund_confirmed(reason: str | None) -> None:
-            if not reason:
-                return
-            staff = self.app.current_user
-            staff_name = f"{staff.first_name} {staff.last_name}" if staff else "Unknown"
-            ok, message = square_service.process_refund(
-                txn_id=self.selected_pos_txn_id,
-                reason=reason,
-                refunded_by=staff_name,
-            )
-            self.app.notify(message, severity="information" if ok else "error")
-            if ok:
-                self.load_pos_transactions()
-
-        self.app.push_screen(
-            RefundConfirmModal(txn.id, txn.amount, txn.customer_name or ""),
-            on_refund_confirmed,
-        )
 
     def save_user_preferences(self):
         """Reads and persists the current user's My Preferences widgets to UserPreference."""
@@ -1880,57 +1063,6 @@ class Dashboard(Screen):
         self.load_feedback()
 
     # ... rest of methods like load_pending, load_members, run_raw_sql ...
-    def load_pending(self):
-        table = self.query_one("#pending_table")
-        table.clear()
-        users = services.get_pending_users()
-        for u in users:
-            table.add_row(
-                str(u.account_number),
-                f"{u.first_name} {u.last_name}",
-                u.email,
-                str(u.joined_date),
-            )
-
-    def load_members(self):
-        table = self.query_one("#members_table")
-        table.clear()
-        roles_to_fetch = []
-        if self.query_one("#chk_admin").value:
-            roles_to_fetch.append("admin")
-        if self.query_one("#chk_staff").value:
-            roles_to_fetch.append("staff")
-        if self.query_one("#chk_member").value:
-            roles_to_fetch.append("member")
-        if self.query_one("#chk_community").value:
-            roles_to_fetch.append("community")
-
-        # Collect users from each active filter, deduplicating by account number.
-        # "Signed In" is additive -- it unions currently signed-in users with the
-        # role-filtered results rather than restricting them.
-        users_by_acct = {}
-        if roles_to_fetch:
-            for u in services.get_users(roles_to_fetch):
-                users_by_acct[u.account_number] = u
-        if self.query_one("#chk_signed_in").value:
-            for u in services.get_signed_in_users():
-                users_by_acct[u.account_number] = u
-
-        if not users_by_acct:
-            return
-
-        for u in users_by_acct.values():
-            # FIX: Handle string vs Enum role safely
-            role_display = (
-                u.role.name if hasattr(u.role, "name") else str(u.role).upper()
-            )
-            table.add_row(
-                str(u.account_number),
-                f"{u.first_name} {u.last_name}",
-                role_display,
-                u.email,
-            )
-
     def run_raw_sql(self, query: str):
         if not query.strip():
             self.app.notify("Please enter a SQL query", severity="error")
@@ -1948,265 +1080,3 @@ class Dashboard(Screen):
                 status_lbl.update(f"Success: Affected {result['rows_affected']} rows.")
         else:
             status_lbl.update(f"Error: {result['error']}")
-
-    # --- Storage Tab ---
-
-    def load_storage_assignments(self):
-        """Loads active and archived assignment rows into the Storage tab tables."""
-        try:
-            active_table = self.query_one("#storage_active_table", DataTable)
-            archived_table = self.query_one("#storage_archived_table", DataTable)
-        except Exception:
-            return
-
-        active_table.clear()
-        for a in services.get_active_storage_assignments():
-            unit = services.get_storage_unit_by_id(a.unit_id)
-            unit_label = unit.unit_number if unit else str(a.unit_id)
-            name = a.assigned_to_name or ""
-            total = f"${a.charge_total:.2f}" if a.charge_total is not None else ""
-            active_table.add_row(
-                str(a.id),
-                unit_label,
-                name,
-                a.item_description or "",
-                a.notes or "",
-                a.charge_type or "",
-                total,
-                a.assigned_at.strftime("%Y-%m-%d %H:%M"),
-            )
-
-        archived_table.clear()
-        for a in services.get_archived_storage_assignments():
-            unit = services.get_storage_unit_by_id(a.unit_id)
-            unit_label = unit.unit_number if unit else str(a.unit_id)
-            name = a.assigned_to_name or ""
-            total = f"${a.charge_total:.2f}" if a.charge_total is not None else ""
-            archived_at = (
-                a.archived_at.strftime("%Y-%m-%d %H:%M") if a.archived_at else ""
-            )
-            archived_table.add_row(
-                str(a.id),
-                unit_label,
-                name,
-                a.item_description or "",
-                a.charge_type or "",
-                total,
-                archived_at,
-            )
-
-    def open_storage_assign_modal(self):
-        """
-        Opens the StorageAssignModal. The modal includes a unit selector dropdown
-        so staff can choose which unit to assign without a separate picker step.
-        """
-        units = services.get_all_storage_units()
-        if not units:
-            self.app.notify(
-                "No storage units exist. Create units in Settings > Storage Units first.",
-                severity="warning",
-            )
-            return
-        self.app.push_screen(
-            StorageAssignModal(units=units),
-            self._after_storage_assign,
-        )
-
-    def _after_storage_assign(self, result: bool):
-        if result:
-            self.load_storage_assignments()
-
-    def open_storage_view_modal(self):
-        """Opens the read-only view modal for the currently selected active assignment."""
-        if not self.selected_storage_assignment_id:
-            self.app.notify("Select an assignment row first.", severity="warning")
-            return
-        self.app.push_screen(
-            StorageViewModal(assignment_id=self.selected_storage_assignment_id)
-        )
-
-    def open_storage_edit_modal(self):
-        """Opens the edit modal for the currently selected active assignment."""
-        if not self.selected_storage_assignment_id:
-            self.app.notify("Select an assignment row first.", severity="warning")
-            return
-        assignment = services.get_storage_assignment_by_id(
-            self.selected_storage_assignment_id
-        )
-        if not assignment:
-            self.app.notify("Assignment not found.", severity="error")
-            return
-        units = services.get_all_storage_units()
-        self.app.push_screen(
-            StorageEditModal(assignment=assignment, units=units),
-            self._after_storage_edit,
-        )
-
-    def _after_storage_edit(self, result: bool):
-        if result:
-            self.load_storage_assignments()
-
-    def archive_storage_assignment(self):
-        """Archives the currently selected active assignment."""
-        if not self.selected_storage_assignment_id:
-            self.app.notify("Select an assignment row first.", severity="warning")
-            return
-        ok = services.archive_storage_assignment(self.selected_storage_assignment_id)
-        if ok:
-            self.app.notify("Storage assignment archived.")
-            self.selected_storage_assignment_id = None
-            self.query_one("#btn_storage_view").disabled = True
-            self.query_one("#btn_storage_edit").disabled = True
-            self.query_one("#btn_storage_archive").disabled = True
-        else:
-            self.app.notify(
-                "Could not archive: already archived or not found.", severity="error"
-            )
-        self.load_storage_assignments()
-
-    # --- Inventory Cart ---
-
-    def _load_inv_available_table(self):
-        """Populates the available inventory items table in the Purchases tab."""
-        try:
-            table = self.query_one("#inv_available_table", DataTable)
-        except Exception:
-            return
-        table.clear()
-        for item in services.get_all_inventory_items():
-            table.add_row(
-                str(item.id), item.name, item.description or "", f"${item.price:.2f}"
-            )
-
-    def _rebuild_cart_table(self):
-        """
-        Clears and rebuilds the cart DataTable from _cart, then auto-fills
-        pos_amount with the running total and pos_description with item names.
-        """
-        try:
-            table = self.query_one("#inv_cart_table", DataTable)
-            total_lbl = self.query_one("#inv_cart_total_lbl")
-        except Exception:
-            return
-
-        table.clear()
-        total = 0.0
-        for entry in self._cart:
-            subtotal = entry["qty"] * entry["unit_price"]
-            total += subtotal
-            table.add_row(
-                entry["name"],
-                str(entry["qty"]),
-                f"${entry['unit_price']:.2f}",
-                f"${subtotal:.2f}",
-                key=str(entry["id"]),
-            )
-
-        total_lbl.update(f"Cart Total: ${total:.2f}")
-
-        # Auto-fill the amount and description fields from cart contents
-        try:
-            self.query_one("#pos_amount", Input).value = f"{total:.2f}" if total else ""
-            if self._cart:
-                desc_parts = [
-                    f"{e['name']} x{int(e['qty']) if e['qty'] == int(e['qty']) else e['qty']}"
-                    for e in self._cart
-                ]
-                self.query_one("#pos_description", Input).value = ", ".join(desc_parts)
-            else:
-                self.query_one("#pos_description", Input).value = ""
-        except Exception:
-            pass
-
-    def add_to_cart(self):
-        """Adds the selected available item to the cart, merging qty if already present."""
-        if not self._inv_selected_item:
-            self.app.notify(
-                "Click an item in the table to select it first.", severity="warning"
-            )
-            return
-        try:
-            qty = float(self.query_one("#inv_qty", Input).value or "1")
-            if qty <= 0:
-                self.app.notify("Quantity must be greater than zero.", severity="error")
-                return
-        except ValueError:
-            qty = 1.0
-
-        # Merge with existing cart entry for the same item
-        for entry in self._cart:
-            if entry["id"] == self._inv_selected_item["id"]:
-                entry["qty"] += qty
-                self._rebuild_cart_table()
-                return
-
-        self._cart.append(
-            {
-                "id": self._inv_selected_item["id"],
-                "name": self._inv_selected_item["name"],
-                "qty": qty,
-                "unit_price": self._inv_selected_item["price"],
-            }
-        )
-        self._rebuild_cart_table()
-
-    def remove_from_cart(self):
-        """Removes the selected cart row by item ID."""
-        if self._inv_selected_cart_item_id is None:
-            self.app.notify("Select a cart row first.", severity="warning")
-            return
-        self._cart = [
-            e for e in self._cart if e["id"] != self._inv_selected_cart_item_id
-        ]
-        self._inv_selected_cart_item_id = None
-        try:
-            self.query_one("#btn_remove_from_cart").disabled = True
-        except Exception:
-            pass
-        self._rebuild_cart_table()
-
-    def clear_cart(self):
-        """Empties the cart and resets all cart-related state."""
-        self._cart = []
-        self._inv_selected_cart_item_id = None
-        try:
-            self.query_one("#btn_remove_from_cart").disabled = True
-        except Exception:
-            pass
-        self._rebuild_cart_table()
-
-    def add_manual_to_cart(self):
-        """Adds a custom (manual) line item to the cart from the POS form fields."""
-        try:
-            desc = self.query_one("#pos_manual_desc", Input).value.strip()
-            price_str = self.query_one("#pos_manual_price", Input).value.strip()
-        except Exception as e:
-            self.app.notify(f"Form error: {e}", severity="error")
-            return
-
-        if not desc:
-            self.app.notify("Please enter an item name/description.", severity="error")
-            return
-        try:
-            price = float(price_str)
-            if price <= 0:
-                self.app.notify("Price must be greater than zero.", severity="error")
-                return
-        except (ValueError, TypeError):
-            self.app.notify("Please enter a valid price.", severity="error")
-            return
-
-        self._manual_entry_counter += 1
-        self._cart.append(
-            {
-                "id": f"manual_{self._manual_entry_counter}",
-                "name": desc,
-                "qty": 1,
-                "unit_price": price,
-            }
-        )
-        self._rebuild_cart_table()
-
-        # Clear the manual entry fields after adding
-        self.query_one("#pos_manual_desc", Input).value = ""
-        self.query_one("#pos_manual_price", Input).value = ""

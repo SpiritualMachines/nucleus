@@ -14,7 +14,7 @@ from screens.login import LoginScreen
 
 
 class HackspaceApp(App):
-    # Standard Library Textual Theme
+    # Fallback theme used before the DB is available; overridden in on_mount
     CSS_THEME = "nord"
 
     # This tells Textual to load CSS from the external file
@@ -75,8 +75,11 @@ class HackspaceApp(App):
             print(f"[Error Email] Failed to send error notification email: {e}")
 
     def on_mount(self):
-        # 1. FORCE THE THEME PROGRAMMATICALLY
-        self.theme = "nord"
+        # 1. Apply the persisted theme (falls back to nord if not yet set)
+        create_db_and_tables()
+        run_migrations()
+        saved_theme = services.get_setting("app_theme", "nord")
+        self.theme = saved_theme
 
         # 2. Start background scheduler threads.
         #    Maintenance (membership expiry) runs immediately and then daily at midnight.
@@ -87,11 +90,7 @@ class HackspaceApp(App):
         threading.Thread(target=self.run_email_scheduler, daemon=True).start()
         threading.Thread(target=self.run_monthly_report_scheduler, daemon=True).start()
 
-        # 3. Initialize DB, apply pending schema migrations, seed settings, then load UI
-        create_db_and_tables()
-        run_migrations()
-
-        # Seed settings from the file on first run; existing keys are never overwritten
+        # 3. Seed settings from the file on first run; existing keys are never overwritten
         services.initialize_default_settings(
             {
                 "hackspace_name": settings.HACKSPACE_NAME,
@@ -167,13 +166,9 @@ class HackspaceApp(App):
             # with create_db_and_tables() on the very first launch.
             sent_date = None
             try:
-                last_sent_str = services.get_setting(
-                    "report_last_sent_date", ""
-                )
+                last_sent_str = services.get_setting("report_last_sent_date", "")
                 if last_sent_str:
-                    sent_date = datetime.strptime(
-                        last_sent_str, "%Y-%m-%d"
-                    ).date()
+                    sent_date = datetime.strptime(last_sent_str, "%Y-%m-%d").date()
             except Exception:
                 sent_date = None
 

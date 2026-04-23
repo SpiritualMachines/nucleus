@@ -5,6 +5,8 @@ This module provides an embeddable settings panel that mounts directly inside
 the Dashboard's Settings tab, keeping all navigation within the main tab bar.
 """
 
+from core import services, square_service
+from core.config import settings
 from textual.app import ComposeResult
 from textual.containers import Horizontal, VerticalScroll
 from textual.widget import Widget
@@ -20,9 +22,6 @@ from textual.widgets import (
     Select,
     TextArea,
 )
-
-from core import services, square_service
-from core.config import settings
 
 
 class SettingsScreen(Widget):
@@ -110,9 +109,9 @@ class SettingsScreen(Widget):
                 yield ListItem(Label("Security"), id="nav_settings_security")
                 yield ListItem(Label("Point of Sale"), id="nav_settings_pos")
                 yield ListItem(Label("Subscriptions"), id="nav_settings_subscriptions")
-                yield ListItem(Label("Product Categories"), id="nav_settings_products")
+                yield ListItem(Label("Services"), id="nav_settings_products")
                 yield ListItem(Label("Storage Units"), id="nav_settings_storage")
-                yield ListItem(Label("Inventory"), id="nav_settings_inventory")
+                yield ListItem(Label("Products"), id="nav_settings_inventory")
                 yield ListItem(
                     Label("Email and Notifications"), id="nav_settings_email"
                 )
@@ -220,6 +219,34 @@ class SettingsScreen(Widget):
                         services.get_setting("app_currency_name", "Credits"),
                         placeholder="e.g. Credits",
                         id="setting_currency_name",
+                    )
+
+                    yield Label("App Theme:")
+                    yield Select(
+                        [
+                            ("Nord", "nord"),
+                            ("Textual Dark", "textual-dark"),
+                            ("Textual Light", "textual-light"),
+                            ("Gruvbox", "gruvbox"),
+                            ("Dracula", "dracula"),
+                            ("Tokyo Night", "tokyo-night"),
+                            ("Monokai", "monokai"),
+                            ("Flexoki", "flexoki"),
+                            ("Catppuccin Mocha", "catppuccin-mocha"),
+                            ("Catppuccin Latte", "catppuccin-latte"),
+                            ("Catppuccin Frappe", "catppuccin-frappe"),
+                            ("Catppuccin Macchiato", "catppuccin-macchiato"),
+                            ("Solarized Dark", "solarized-dark"),
+                            ("Solarized Light", "solarized-light"),
+                            ("Rose Pine", "rose-pine"),
+                            ("Rose Pine Moon", "rose-pine-moon"),
+                            ("Rose Pine Dawn", "rose-pine-dawn"),
+                            ("Atom One Dark", "atom-one-dark"),
+                            ("Atom One Light", "atom-one-light"),
+                            ("Textual ANSI", "textual-ansi"),
+                        ],
+                        id="setting_app_theme",
+                        value=services.get_setting("app_theme", "nord"),
                     )
 
                     yield Label("Default Export Format:")
@@ -502,9 +529,9 @@ class SettingsScreen(Widget):
                         )
                     yield Label("", id="lbl_poll_result")
 
-                # --- Product Categories ---
+                # --- Services ---
                 with VerticalScroll(id="settings_panel_products"):
-                    yield Label("Product Categories", classes="title")
+                    yield Label("Services", classes="title")
                     yield Label(
                         "Define reusable tier templates for memberships and day passes."
                         " Selecting a tier in the Add Membership or Add Day Pass"
@@ -601,9 +628,9 @@ class SettingsScreen(Widget):
                             variant="success",
                         )
 
-                # --- Inventory ---
+                # --- Products ---
                 with VerticalScroll(id="settings_panel_inventory"):
-                    yield Label("Inventory Items", classes="title")
+                    yield Label("Products", classes="title")
                     yield Label(
                         "Define items that staff can select when processing"
                         " transactions. Items appear in the inventory cart"
@@ -619,7 +646,7 @@ class SettingsScreen(Widget):
                             disabled=True,
                         )
 
-                    yield Label("Add Inventory Item", classes="subtitle")
+                    yield Label("Add Product Item", classes="subtitle")
                     yield Label("Name:")
                     yield Input(
                         placeholder="e.g. 3D Print Filament or Chips",
@@ -908,6 +935,11 @@ class SettingsScreen(Widget):
         if handler:
             handler()
 
+    def on_select_changed(self, event: Select.Changed) -> None:
+        """Preview the app theme immediately when the theme selector changes."""
+        if event.select.id == "setting_app_theme" and event.value:
+            self.app.theme = str(event.value)
+
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         """Track the selected row for each settings-owned table."""
         if event.data_table.id == "tbl_mem_tiers":
@@ -998,6 +1030,7 @@ class SettingsScreen(Widget):
             app_name = self.query_one("#setting_app_name").value.strip()
             ascii_logo = self.query_one("#setting_ascii_logo", TextArea).text
             currency_name = self.query_one("#setting_currency_name").value.strip()
+            app_theme = self.query_one("#setting_app_theme", Select).value or "nord"
             default_export = (
                 self.query_one("#setting_default_export", Select).value or "csv"
             )
@@ -1035,10 +1068,12 @@ class SettingsScreen(Widget):
             services.set_setting("app_name", app_name)
             services.set_setting("ascii_logo", ascii_logo)
             services.set_setting("app_currency_name", currency_name)
+            services.set_setting("app_theme", app_theme)
             services.set_setting("default_export_format", default_export)
             services.set_setting("report_header_text", report_header)
             services.set_setting("staff_email", staff_email)
             self.app.title = hackspace_name
+            self.app.theme = app_theme
             # Propagate the sign-in button label change to Dashboard if it is
             # currently in the screen stack.
             try:

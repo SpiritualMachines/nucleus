@@ -4,6 +4,7 @@ __all__ = [
     "CommunityContactsReportModal",
     "PeriodTractionReportModal",
     "PeriodTransactionReportModal",
+    "ProductSalesReportModal",
 ]
 
 from datetime import datetime, timedelta
@@ -214,7 +215,9 @@ class PeriodTransactionReportModal(ModalScreen):
                 },
             ]
 
-            filename = exporters.get_timestamp_filename("period_transaction_report", fmt)
+            filename = exporters.get_timestamp_filename(
+                "period_transaction_report", fmt
+            )
 
             if fmt == "csv":
                 path = exporters.export_period_report_to_csv(
@@ -235,6 +238,7 @@ class PeriodTransactionReportModal(ModalScreen):
             self.app.notify("Invalid date format. Use YYYY-MM-DD.", severity="error")
         except Exception as e:
             self.app.notify(f"Export Failed: {str(e)}", severity="error")
+
 
 class PeriodTractionReportModal(ModalScreen):
     """
@@ -356,6 +360,19 @@ class PeriodTractionReportModal(ModalScreen):
                     ],
                     "rows": data["community_contacts"],
                 },
+                {
+                    "title": "Product Sales",
+                    "headers": [
+                        "Sale ID",
+                        "Date",
+                        "Transaction ID",
+                        "Item",
+                        "Qty",
+                        "Unit Price",
+                        "Total",
+                    ],
+                    "rows": data["product_sales"],
+                },
             ]
 
             period_label = f"{start_str} to {end_str}"
@@ -369,6 +386,92 @@ class PeriodTractionReportModal(ModalScreen):
                 path = exporters.export_period_report_to_pdf(
                     filename,
                     f"Period Traction Report: {period_label}",
+                    sections,
+                    output_dir,
+                )
+
+            self.app.notify(f"Exported to: {path}")
+            self.dismiss(None)
+
+        except ValueError:
+            self.app.notify("Invalid date format. Use YYYY-MM-DD.", severity="error")
+        except Exception as e:
+            self.app.notify(f"Export Failed: {str(e)}", severity="error")
+
+
+class ProductSalesReportModal(ModalScreen):
+    """
+    Modal for exporting a Products / Services Sales Report for a user-selected
+    date range. Covers inventory product sales, day pass activations, and
+    membership activations, each in its own section of the exported file.
+    """
+
+    def compose(self) -> ComposeResult:
+        today = datetime.now()
+        start = today - timedelta(days=30)
+
+        with Vertical(classes="splash-container"):
+            yield Label("Products / Services Sales Report", classes="title")
+            yield Label(
+                "Select a date range to include in the report.", classes="subtitle"
+            )
+
+            yield Label("Start Date (YYYY-MM-DD):")
+            yield Input(start.strftime("%Y-%m-%d"), id="psr_start")
+
+            yield Label("End Date (YYYY-MM-DD):")
+            yield Input(today.strftime("%Y-%m-%d"), id="psr_end")
+
+            with Horizontal(classes="filter-row"):
+                yield Button("Export CSV", variant="success", id="btn_psr_csv")
+                yield Button("Export PDF", variant="primary", id="btn_psr_pdf")
+                yield Button("Cancel", variant="error", id="btn_psr_cancel")
+
+    def on_button_pressed(self, event: Button.Pressed):
+        if event.button.id == "btn_psr_cancel":
+            self.dismiss(None)
+        elif event.button.id == "btn_psr_csv":
+            self._initiate_export("csv")
+        elif event.button.id == "btn_psr_pdf":
+            self._initiate_export("pdf")
+
+    def _initiate_export(self, fmt: str):
+        def on_directory_selected(path: str | None):
+            if path:
+                self._run_export(fmt, path)
+
+        self.app.push_screen(DirectorySelectScreen(), on_directory_selected)
+
+    def _run_export(self, fmt: str, output_dir: str):
+        try:
+            start_str = self.query_one("#psr_start").value.strip()
+            end_str = self.query_one("#psr_end").value.strip()
+
+            start_date = datetime.strptime(start_str, "%Y-%m-%d")
+            end_date = datetime.strptime(end_str, "%Y-%m-%d").replace(
+                hour=23, minute=59, second=59
+            )
+
+            sections = services.get_products_services_report_data(start_date, end_date)
+
+            total_rows = sum(len(s["rows"]) for s in sections)
+            if total_rows == 0:
+                self.app.notify(
+                    "No products or services in this date range.", severity="warning"
+                )
+                return
+
+            filename = exporters.get_timestamp_filename("products_services_report", fmt)
+            period_label = f"{start_str} to {end_str}"
+
+            if fmt == "csv":
+                path = exporters.export_period_report_to_csv(
+                    filename, sections, output_dir
+                )
+            else:
+                path = exporters.export_period_report_to_pdf(
+                    filename,
+                    f"Products / Services Sales Report: {period_label}",
                     sections,
                     output_dir,
                 )

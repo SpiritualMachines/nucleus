@@ -84,7 +84,7 @@ def initialize_default_settings(seed_values: dict = None):
         "hackspace_name": "Hackspace",
         "tag_name": "Makerspace",
         "app_name": "Nucleus Daemon",
-        "app_version": "v0.9.79",
+        "app_version": "v0.9.8",
         "ascii_logo": "",
         "logout_timeout_minutes": "10",
         # Space operations

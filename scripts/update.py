@@ -38,6 +38,7 @@ os.chdir(project_root)
 # Virtualenv auto-detection
 # ---------------------------------------------------------------------------
 
+
 def _find_venv_python() -> Path | None:
     """
     Locates the Python interpreter inside the project virtualenv.
@@ -118,7 +119,7 @@ SKIP_FROM_COPY = {
     "tests",
     "spikes",
     "screenshots",
-    "backups",       # never overwrite live backups
+    "backups",  # never overwrite live backups
     "hackspace.db",  # never overwrite live database
     "__pycache__",
 }
@@ -154,6 +155,7 @@ REQUIRED_FILES = {
 # ---------------------------------------------------------------------------
 # Auto-update helpers
 # ---------------------------------------------------------------------------
+
 
 def _pick_directory(title: str) -> Path | None:
     """
@@ -223,10 +225,7 @@ def _validate_source(source_dir: Path, live_dir: Path | None) -> bool:
         missing_from_source = []
         for live_item in sorted(live_dir.rglob("*")):
             parts = live_item.relative_to(live_dir).parts
-            if any(
-                p in SKIP_FROM_COPY or p.startswith(".")
-                for p in parts
-            ):
+            if any(p in SKIP_FROM_COPY or p.startswith(".") for p in parts):
                 continue
             if live_item.name == "__pycache__" or live_item.suffix == ".pyc":
                 continue
@@ -248,7 +247,9 @@ def _validate_source(source_dir: Path, live_dir: Path | None) -> bool:
             if proceed != "y":
                 return False
         else:
-            print("  Live comparison: source contains all files from live installation.")
+            print(
+                "  Live comparison: source contains all files from live installation."
+            )
 
     return True
 
@@ -423,19 +424,18 @@ def _print_elevation_hint(live_dir: Path):
         )
     elif sys.platform == "darwin":
         print(
-            "  On macOS, re-run this script with sudo:\n"
-            f"    sudo python3 {script_path}"
+            f"  On macOS, re-run this script with sudo:\n    sudo python3 {script_path}"
         )
     else:
         print(
-            "  On Linux, re-run this script with sudo:\n"
-            f"    sudo python3 {script_path}"
+            f"  On Linux, re-run this script with sudo:\n    sudo python3 {script_path}"
         )
 
 
 # ---------------------------------------------------------------------------
 # Auto-update entry point
 # ---------------------------------------------------------------------------
+
 
 def run_auto_update():
     """
@@ -457,7 +457,9 @@ def run_auto_update():
         print("ERROR: Invalid or missing live directory. Aborting.")
         return
 
-    source_dir = _pick_directory("Step 2 of 2 - Select Update Source Directory (USB Drive)")
+    source_dir = _pick_directory(
+        "Step 2 of 2 - Select Update Source Directory (USB Drive)"
+    )
     if not source_dir or not source_dir.exists():
         print("ERROR: Invalid or missing source directory. Aborting.")
         return
@@ -465,9 +467,11 @@ def run_auto_update():
     print(f"  Live installation : {live_dir}")
     print(f"  Update source     : {source_dir}")
 
-    confirm = input(
-        "\nThis will overwrite files in the live installation. Proceed? (y/N): "
-    ).strip().lower()
+    confirm = (
+        input("\nThis will overwrite files in the live installation. Proceed? (y/N): ")
+        .strip()
+        .lower()
+    )
     if confirm != "y":
         print("Update cancelled.")
         return
@@ -506,6 +510,7 @@ def run_auto_update():
 # ---------------------------------------------------------------------------
 # Manual update (migrations only on current installation)
 # ---------------------------------------------------------------------------
+
 
 def _load_core():
     """

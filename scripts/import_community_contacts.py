@@ -108,7 +108,9 @@ def normalise_str(value: str | None) -> str | None:
     return value.strip()
 
 
-def find_existing(session: Session, first_name: str, last_name: str | None, visit_date: datetime) -> CommunityContact | None:
+def find_existing(
+    session: Session, first_name: str, last_name: str | None, visit_date: datetime
+) -> CommunityContact | None:
     """
     Return the existing CommunityContact for this person on this calendar day,
     or None if no match is found.
@@ -126,10 +128,18 @@ def find_existing(session: Session, first_name: str, last_name: str | None, visi
     return None
 
 
-def merge_into(existing: CommunityContact, row_email: str, row_pronouns: str | None,
-               row_age_range: str | None, row_postal: str | None, row_how_heard: str | None,
-               row_reason: str | None, row_opt_updates: bool, row_opt_volunteer: bool,
-               row_opt_teaching: bool) -> bool:
+def merge_into(
+    existing: CommunityContact,
+    row_email: str,
+    row_pronouns: str | None,
+    row_age_range: str | None,
+    row_postal: str | None,
+    row_how_heard: str | None,
+    row_reason: str | None,
+    row_opt_updates: bool,
+    row_opt_volunteer: bool,
+    row_opt_teaching: bool,
+) -> bool:
     """
     Merge data from a duplicate CSV row into an existing record. Only fills in
     blank fields and upgrades opt-in flags from False to True — never overwrites
@@ -205,7 +215,9 @@ def import_csv(csv_path: Path) -> None:
                         continue
 
                     connect_cell = row.get(COL_CONNECT, "") or ""
-                    opt_in_updates, opt_in_volunteer, opt_in_teaching = parse_opt_ins(connect_cell)
+                    opt_in_updates, opt_in_volunteer, opt_in_teaching = parse_opt_ins(
+                        connect_cell
+                    )
 
                     raw_email = normalise_str(row.get(COL_EMAIL))
                     email = raw_email if raw_email else ""

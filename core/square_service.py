@@ -26,7 +26,15 @@ from typing import List, Optional, Tuple
 from sqlmodel import Session, desc, select
 
 from core.database import engine
-from core.models import PosConfig, SquareTransaction, SquareTransactionStatus
+from core.models import (
+    ActiveMembership,
+    DayPass,
+    PosConfig,
+    ProductTier,
+    SquareTransaction,
+    SquareTransactionStatus,
+    User,
+)
 
 
 # ---------------------------------------------------------------------------
@@ -556,7 +564,9 @@ def record_cash_payment(
             # Square requires cash_details when source_id is CASH. buyer_supplied_money
             # is set equal to the charge amount since we do not collect the tendered amount.
             cash_details=CashPaymentDetailsParams(
-                buyer_supplied_money=MoneyParams(amount=amount_cents, currency=currency),
+                buyer_supplied_money=MoneyParams(
+                    amount=amount_cents, currency=currency
+                ),
             ),
             location_id=config.square_location_id,
             customer_id=square_customer_id,
@@ -1048,6 +1058,118 @@ def get_recent_transactions(
             results = [t for t in results if t.created_at >= cutoff]
             results = results[:limit]
         return results
+
+
+def get_all_transactions(limit: int = 200) -> list:
+    """Returns a merged list of all transaction activity, sorted newest first.
+
+    Includes SquareTransaction records (paid manual sales, memberships, daypasses),
+    DayPass entries (all daypass activations), and ActiveMembership rows
+    for free/promotional tiers ($0 price). This gives staff a complete audit view
+    rather than only seeing Square-processed records.
+
+    Each entry is a dict with keys: id, date, customer_name, amount, type,
+    description, status, via, processed_by. The id field is prefixed with 'T'
+    (SquareTransaction), 'D' (daypass), or 'M' (membership) so callers can
+    determine which rows support refund and status-check actions.
+    """
+    rows = []
+
+    with Session(engine) as session:
+        # --- SquareTransaction records cover all paid activity ---
+        txns = session.exec(
+            select(SquareTransaction)
+            .order_by(desc(SquareTransaction.created_at))
+            .limit(limit)
+        ).all()
+        for t in txns:
+            if t.square_status == "cash_square":
+                via = "Cash (Square)"
+            elif t.square_status == "cash":
+                via = "Cash"
+            elif t.is_local:
+                via = "Local"
+            else:
+                via = "Square"
+            status = (
+                "Refunded"
+                if t.refund_status == "refunded"
+                else t.square_status.replace("_", " ").title()
+            )
+            rows.append(
+                {
+                    "id": f"T{t.id}",
+                    "date": t.created_at,
+                    "customer_name": t.customer_name or "",
+                    "amount": f"${t.amount:.2f}",
+                    "type": "Manual",
+                    "description": t.description or "",
+                    "status": status,
+                    "via": via,
+                    "processed_by": t.processed_by or "",
+                }
+            )
+
+        # --- Day pass activations ---
+        dp_pairs = session.exec(
+            select(DayPass, User)
+            .join(User, DayPass.user_account_number == User.account_number)
+            .order_by(desc(DayPass.date))
+            .limit(limit)
+        ).all()
+        for c, u in dp_pairs:
+            rows.append(
+                {
+                    "id": f"D{c.id}",
+                    "date": c.date,
+                    "customer_name": f"{u.first_name} {u.last_name}",
+                    "amount": "$0.00",
+                    "type": "Day Pass",
+                    "description": c.description or "",
+                    "status": "Activated",
+                    "via": "Local",
+                    "processed_by": "",
+                }
+            )
+
+        # --- Free-tier membership activations ---
+        free_tier_names = {
+            t.name
+            for t in session.exec(
+                select(ProductTier).where(
+                    ProductTier.tier_type == "membership",
+                    ProductTier.price == 0.0,
+                )
+            ).all()
+        }
+        if free_tier_names:
+            mem_pairs = session.exec(
+                select(ActiveMembership, User)
+                .join(
+                    User,
+                    ActiveMembership.user_account_number == User.account_number,
+                )
+                .where(ActiveMembership.description.in_(free_tier_names))
+                .order_by(desc(ActiveMembership.start_date))
+                .limit(limit)
+            ).all()
+            for m, u in mem_pairs:
+                rows.append(
+                    {
+                        "id": f"M{m.id}",
+                        "date": m.start_date,
+                        "customer_name": f"{u.first_name} {u.last_name}",
+                        "amount": "$0.00",
+                        "type": "Membership",
+                        "description": m.description or "",
+                        "status": "Activated",
+                        "via": "Free",
+                        "processed_by": "",
+                    }
+                )
+
+    rows.sort(key=lambda r: r["date"], reverse=True)
+    return rows[:limit]
 
 
 def get_transaction_by_id(txn_id: int) -> Optional[SquareTransaction]:

@@ -301,9 +301,7 @@ def _build_monthly_transaction_report_html(data: dict) -> str:
             )
 
         headers = ["ID", "Date", "Customer", "Description", "Amount", "Processed By"]
-        header_cells = "".join(
-            f"<th style='{_TH_STYLE}'>{h}</th>" for h in headers
-        )
+        header_cells = "".join(f"<th style='{_TH_STYLE}'>{h}</th>" for h in headers)
         thead = f"<thead><tr>{header_cells}</tr></thead>"
 
         body_rows = []
@@ -440,9 +438,7 @@ def send_error_notification_email(
     hackspace_name = get_setting("hackspace_name", "Nucleus")
     from_email = get_setting("report_from_email", "onboarding@resend.dev")
 
-    to_emails = [
-        addr.strip() for addr in error_email_to_raw.split(",") if addr.strip()
-    ]
+    to_emails = [addr.strip() for addr in error_email_to_raw.split(",") if addr.strip()]
     if not to_emails:
         return False
 
@@ -534,6 +530,7 @@ def _build_html(data: dict) -> str:
     metrics = [
         ("Active Members (total)", "active_members_snapshot"),
         ("New Members", "new_members"),
+        ("Free Memberships Activated", "free_memberships"),
         ("Memberships Expiring", "memberships_expiring"),
         ("Sign-ins", "sign_ins"),
         ("Volunteers", "volunteers"),
@@ -613,16 +610,18 @@ def _build_html(data: dict) -> str:
             "<p style='color: #888;'>No community contacts recorded in this period.</p>"
         )
 
-    # --- Table 3: Recent transactions detail ---
-    txns = data["recent_transactions_detail"]
-    if txns:
-        txn_header_cells = "".join(
+    # --- Tables 3a and 3b: Transactions split by 24h and 7d windows ---
+    def _build_txn_detail_table(txns):
+        if not txns:
+            return (
+                "<p style='color: #888;'>No transactions recorded in this period.</p>"
+            )
+        header_cells = "".join(
             f"<th style='{_TH_STYLE}'>{h}</th>"
             for h in ["Date", "Customer", "Amount", "Description", "Status", "Via"]
         )
-        txn_thead = f"<thead><tr>{txn_header_cells}</tr></thead>"
-
-        txn_rows = []
+        thead = f"<thead><tr>{header_cells}</tr></thead>"
+        rows = []
         for i, t in enumerate(txns):
             td = _TD_ALT_STYLE if i % 2 else _TD_STYLE
             cells = "".join(
@@ -636,16 +635,12 @@ def _build_html(data: dict) -> str:
                     t["via"],
                 ]
             )
-            txn_rows.append(f"<tr>{cells}</tr>")
+            rows.append(f"<tr>{cells}</tr>")
+        tbody = f"<tbody>{''.join(rows)}</tbody>"
+        return f"<table style='{_TABLE_STYLE}'>{thead}{tbody}</table>"
 
-        txn_tbody = f"<tbody>{''.join(txn_rows)}</tbody>"
-        transactions_table = (
-            f"<table style='{_TABLE_STYLE}'>{txn_thead}{txn_tbody}</table>"
-        )
-    else:
-        transactions_table = (
-            "<p style='color: #888;'>No transactions recorded in this period.</p>"
-        )
+    transactions_24h_table = _build_txn_detail_table(data["transactions_24h"])
+    transactions_7d_table = _build_txn_detail_table(data["transactions_7d"])
 
     # A unique token per send prevents Gmail's threading heuristic from treating
     # repeated sections as "already seen" content from a previous daily report
@@ -681,9 +676,14 @@ def _build_html(data: dict) -> str:
     </div>
     {divider}
     <h3 style="border-bottom: 2px solid #333; padding-bottom: 4px;">
+      Transactions (past 24 hours)
+    </h3>
+    {transactions_24h_table}
+    {divider}
+    <h3 style="border-bottom: 2px solid #333; padding-bottom: 4px;">
       Transactions (last 7 days)
     </h3>
-    {transactions_table}
+    {transactions_7d_table}
     {divider}
     <p style="font-size: 0.8em; color: #999;">
       Sent automatically by Nucleus. To disable, turn off daily reports in Settings.

@@ -6,7 +6,7 @@ from typing import List
 from sqlmodel import Session, desc, select
 
 from core.database import engine
-from core.models import UserCredits
+from core.models import DayPass
 
 __all__ = [
     "get_user_day_passes",
@@ -14,28 +14,24 @@ __all__ = [
 ]
 
 
-def get_user_day_passes(acct_num: int) -> List[UserCredits]:
-    # This expects an object with .date and .description
+def get_user_day_passes(acct_num: int) -> List[DayPass]:
+    """Returns all day pass records for the given user, newest first."""
     with Session(engine) as session:
-        # Returning UserCredits that are flagged as 'daypass'
         stmt = (
-            select(UserCredits)
-            .where(UserCredits.user_account_number == acct_num)
-            .where(UserCredits.credit_debit == "daypass")
-            .order_by(desc(UserCredits.date))
+            select(DayPass)
+            .where(DayPass.user_account_number == acct_num)
+            .order_by(desc(DayPass.date))
         )
         return session.exec(stmt).all()
 
 
 def add_day_pass(acct_num: int, date: datetime, description: str):
+    """Creates a new day pass activation record for the given user."""
     with Session(engine) as session:
-        # Store as a credit record with special type
-        credit = UserCredits(
+        day_pass = DayPass(
             user_account_number=acct_num,
-            credits=0.0,
-            description=description,
-            credit_debit="daypass",
             date=date,
+            description=description,
         )
-        session.add(credit)
+        session.add(day_pass)
         session.commit()

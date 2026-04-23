@@ -57,6 +57,45 @@ def _verify_and_drop_column(session: Session, table: str, column: str):
         session.commit()
 
 
+def _migrate_daypasses_from_usercredits(session: Session):
+    """Moves legacy daypass rows from usercredits into the dedicated daypass table.
+
+    Prior to this migration, day pass activations were stored in the usercredits
+    table with credit_debit='daypass'. The new daypass table is a cleaner home.
+    This function is idempotent — rows are removed from usercredits after being
+    copied, so repeated runs only process rows that have not yet been migrated.
+    """
+    inspector = inspect(engine)
+    if "usercredits" not in inspector.get_table_names():
+        return
+    if "daypass" not in inspector.get_table_names():
+        return
+
+    legacy_rows = session.execute(
+        text(
+            "SELECT id, user_account_number, date, description FROM usercredits WHERE credit_debit = 'daypass'"
+        )
+    ).fetchall()
+
+    if not legacy_rows:
+        return
+
+    for row in legacy_rows:
+        session.execute(
+            text(
+                "INSERT INTO daypass (user_account_number, date, description)"
+                " VALUES (:acct, :date, :desc)"
+            ),
+            {"acct": row[1], "date": row[2], "desc": row[3]},
+        )
+        session.execute(
+            text("DELETE FROM usercredits WHERE id = :id"),
+            {"id": row[0]},
+        )
+
+    session.commit()
+
+
 def _normalise_user_roles(session: Session):
     """
     Fixes any user rows whose role value does not match a current UserRole enum
@@ -88,10 +127,7 @@ def _normalise_user_roles(session: Session):
             new_role = lowered if lowered in valid_roles else "community"
 
             session.execute(
-                text(
-                    "UPDATE user SET role = :new_role "
-                    "WHERE account_number = :acct"
-                ),
+                text("UPDATE user SET role = :new_role WHERE account_number = :acct"),
                 {"new_role": new_role, "acct": row.account_number},
             )
         session.commit()
@@ -205,6 +241,15 @@ def run_migrations():
 
         # inventoryitem table — new table for POS transaction cart items.
         # No column migrations needed; create_db_and_tables() creates the table.
+
+        # daypass table — new dedicated table replacing the daypass rows that were
+        # previously stored in usercredits with credit_debit='daypass'.
+        # No column migrations needed; create_db_and_tables() creates the whole table.
+
+        # Data migration: move existing daypass rows out of usercredits into the
+        # dedicated daypass table. Runs every launch but is idempotent — rows are
+        # deleted from usercredits after insertion so they are never copied twice.
+        _migrate_daypasses_from_usercredits(session)
 
         # Data migration: normalise any legacy role values that are not in the
         # current UserRole enum (admin, staff, member, community). Accounts with

@@ -220,17 +220,12 @@ class DayPassHistoryModal(ModalScreen):
 
             date_dt = datetime.strptime(date_str, "%Y-%m-%d")
 
-            # Direct DB update (Assuming UserCredits table stores day passes as established in services.py)
             with Session(engine) as session:
-                # Note: In services.py, add_day_pass uses UserCredits model.
-                # So we query UserCredits here.
-                # However, models.py might not have 'UserCredits' imported if not careful,
-                # but it is imported at top of file.
-                credit = session.get(models.UserCredits, self.selected_pass_id)
-                if credit:
-                    credit.date = date_dt
-                    credit.description = desc_val
-                    session.add(credit)
+                day_pass = session.get(models.DayPass, self.selected_pass_id)
+                if day_pass:
+                    day_pass.date = date_dt
+                    day_pass.description = desc_val
+                    session.add(day_pass)
                     session.commit()
                     self.app.notify("Day Pass Updated")
                     self.load_data()
@@ -248,9 +243,9 @@ class DayPassHistoryModal(ModalScreen):
 
         try:
             with Session(engine) as session:
-                credit = session.get(models.UserCredits, self.selected_pass_id)
-                if credit:
-                    session.delete(credit)
+                day_pass = session.get(models.DayPass, self.selected_pass_id)
+                if day_pass:
+                    session.delete(day_pass)
                     session.commit()
                     self.app.notify("Day Pass Deleted")
                     self.load_data()

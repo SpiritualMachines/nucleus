@@ -22,13 +22,34 @@
     margin-top: 1;
 }
 
-#logout_timer {
+Tabs {
+    height: 4;
+    padding: 1 0;
+}
+
+#top_bar {
+    layout: horizontal;
+    height: 3;
     width: 100%;
-    text-align: right;
+    background: $boost;
+}
+
+#link_bar {
+    width: 1fr;
+    height: 3;
+    content-align: left middle;
     background: $boost;
     color: $text-muted;
     padding: 0 2;
-    dock: bottom;
+}
+
+#logout_timer {
+    width: auto;
+    height: 3;
+    content-align: right middle;
+    background: $boost;
+    color: $text-muted;
+    padding: 0 2;
 }
 
 #logout_timer.urgent {

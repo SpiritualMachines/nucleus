@@ -44,7 +44,9 @@ class PublicPurchaseModal(ModalScreen):
             yield Label("Manual Purchase", classes="title")
             with VerticalScroll(classes="splash-content"):
                 # Step 1: Inventory Cart
-                with Collapsible(title="Step 1: Select Items (Optional)", collapsed=True):
+                with Collapsible(
+                    title="Step 1: Select Items (Optional)", collapsed=True
+                ):
                     yield Label(
                         "Click an item row to select it, set the quantity,"
                         " then click Add to Cart."

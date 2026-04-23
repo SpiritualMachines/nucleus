@@ -77,6 +77,16 @@ class UserCredits(SQLModel, table=True):
     user: Optional["User"] = Relationship(back_populates="credits")
 
 
+class DayPass(SQLModel, table=True):
+    """Records a single day pass activation for a member."""
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    user_account_number: int = Field(foreign_key="user.account_number")
+    date: datetime = Field(default_factory=datetime.now)
+    description: Optional[str] = Field(default=None, sa_column=Column(Text))
+    user: Optional["User"] = Relationship(back_populates="day_passes")
+
+
 class SafetyTraining(SQLModel, table=True):
     id: Optional[int] = Field(default=None, primary_key=True)
     user_account_number: int = Field(foreign_key="user.account_number")
@@ -240,6 +250,26 @@ class InventoryItem(SQLModel, table=True):
     is_active: bool = Field(default=True)
 
 
+class ProductSale(SQLModel, table=True):
+    """Records one inventory item line sold as part of a SquareTransaction.
+
+    Created at POS time (from the cart) and via the Edit Allocation modal.
+    item_name and unit_price are captured at time of sale so the record
+    stays accurate even if the inventory item is later modified or deleted.
+    inventory_item_id is nullable for that same reason.
+    """
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    transaction_id: int = Field(foreign_key="squaretransaction.id", index=True)
+    inventory_item_id: Optional[int] = Field(
+        default=None, foreign_key="inventoryitem.id"
+    )
+    item_name: str
+    unit_price: float
+    quantity: float
+    sold_at: datetime = Field(default_factory=datetime.now)
+
+
 class StorageUnit(SQLModel, table=True):
     """
     Represents a physical storage bin/locker/shelf at the space.
@@ -373,3 +403,4 @@ class User(SQLModel, table=True):
     credits: List[UserCredits] = Relationship(back_populates="user")
     training: List[SafetyTraining] = Relationship(back_populates="user")
     memberships: List[ActiveMembership] = Relationship(back_populates="user")
+    day_passes: List[DayPass] = Relationship(back_populates="user")

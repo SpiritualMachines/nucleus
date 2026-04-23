@@ -5,6 +5,45 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+
+## [0.9.8] - 2026-04-17
+
+### Added
+
+#### Moved Nested Cart
+- On Purchases tab, moved nested cart from Step 1. to above the process transaction buttons.
+
+#### Theme Setting
+- Added ability to change and set default theme to settings under branding.
+
+#### Products/Services Report
+- Added ability to run periodic reports on the sales of products and services.
+
+#### Transactions Tab
+- Added a dedicated Transactions tab after Purchases (staff/admin only) with a flat, always-visible table showing all activity: Square/POS transactions, day pass activations, and free-tier membership activations.
+- Added ability to edit transactions details.
+- Added abiltiy to edit transaction allocation without issuing a refund.
+
+#### DayPass Table
+- Extracted day pass records out of the UserCredits table into a dedicated DayPass table. Existing daypass rows are automatically migrated on first launch.  
+
+#### Added Header Links
+- Added custom header with project links and link to User Manual.
+
+#### Daily Acitivity Email
+- Changed so Trasanctions is broken up into two tables. One table showing the past 24hrs and a second showing the past 7 days.
+- Added row indicating number of Free "Promotional Memberships Activated".
+
+#### Label Changes
+- In settings renamed "Product Categories" to "Services" and "Inventory" to "Products".
+
+#### layout/UI
+- Layout and UI improvements
+
+
+___
+
+
 ## [0.9.79] - 2026-04-02
 
 ### Added
