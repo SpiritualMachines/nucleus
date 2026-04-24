@@ -84,7 +84,7 @@ def initialize_default_settings(seed_values: dict = None):
         "hackspace_name": "Hackspace",
         "tag_name": "Makerspace",
         "app_name": "Nucleus Daemon",
-        "app_version": "v0.9.8",
+        "app_version": "v0.9.81",
         "ascii_logo": "",
         "logout_timeout_minutes": "10",
         # Space operations
@@ -99,7 +99,6 @@ def initialize_default_settings(seed_values: dict = None):
         "backup_email": "",
         # Reporting and branding
         "app_currency_name": "Credits",
-        "default_export_format": "csv",
         "report_header_text": "",
         "staff_email": "",
         # Security

@@ -23,7 +23,7 @@ class StorageMixin:
 
     def _compose_storage_tab(self) -> ComposeResult:
         """Yields widgets for the Storage tab."""
-        with VerticalScroll():
+        with VerticalScroll(id="storage-tab-scroll"):
             yield Label("Member Storage", classes="title")
 
             # Active storage assignments

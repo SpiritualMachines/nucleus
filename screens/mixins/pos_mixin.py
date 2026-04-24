@@ -23,7 +23,7 @@ class POSMixin:
 
     def _compose_purchases_tab(self, user, currency) -> ComposeResult:
         """Yields widgets for the Purchases tab."""
-        with VerticalScroll():
+        with VerticalScroll(id="purchases-tab-scroll"):
             yield Label("Purchases", classes="title")
 
             # === STAFF / ADMIN VIEW ===
@@ -267,7 +267,7 @@ class POSMixin:
         records plus free daypass and free membership activations that would
         not otherwise appear in the POS history.
         """
-        with VerticalScroll():
+        with Vertical(id="transactions-tab-container"):
             yield Label("Transactions", classes="title")
             yield DataTable(id="all_txns_table")
             with Horizontal(classes="filter-row"):

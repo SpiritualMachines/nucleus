@@ -3,7 +3,29 @@
 All notable changes to Nucleus will be documented here.
 Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
+
 ---
+
+## [0.9.81] - 2026-04-23
+
+### Added
+
+#### Version and Links in Daily Acitivity Email
+- Added Nucleus version number, User Manual link and Change Log link in the Daily Acitivity Report email.
+
+### Fixed 
+
+#### Fixed Daily Acitivity Email
+- Fixed Incorrect Member Reporting in Daily Acitivity Email.
+
+#### Fixed Table Sizing and Duplicated Scrolls Bars on Mac OS
+- Fixed the transactions table sizing on the Transactions tab.
+- Fixed the duplicated scroll bars on multiple tabs.
+
+#### Removed Default Export Filetype Setting
+- Remvoed the defualt export filetype dropdown in settings that is no longer functional. 
+
+___
 
 
 ## [0.9.8] - 2026-04-17

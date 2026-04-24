@@ -145,3 +145,31 @@ Tabs {
     border: solid $secondary;
     margin-bottom: 1;
 }
+
+/* --- Tab scroll containers ---
+   Each VerticalScroll inside a TabPane must be height: 1fr so it fills the pane
+   and scrolls internally. Without this the container expands to content height,
+   the outer pane tries to scroll too, and macOS shows two scroll bars. */
+#transactions-tab-container,
+#purchases-tab-scroll,
+#storage-tab-scroll,
+#reports-tab-container {
+    height: 1fr;
+}
+
+/* --- Transactions Tab --- */
+#all_txns_table {
+    height: 1fr;
+    border: solid $secondary;
+    margin-bottom: 1;
+}
+
+/* --- Reports Tab --- */
+/* Give the members table a bounded height so it scrolls internally rather than
+   expanding and forcing the outer container to also scroll. */
+#members_table {
+    height: 1fr;
+    min-height: 10;
+    border: solid $secondary;
+    margin-bottom: 1;
+}

@@ -539,9 +539,6 @@ def _build_html(data: dict) -> str:
         ("Community Contacts", "community_contacts"),
     ]
 
-    # Active members is a snapshot, not a per-day count — fill it from the top-level key
-    active_snapshot = data["total_active_members"]
-
     body_rows = []
     for i, (label, key) in enumerate(metrics):
         is_alt = i % 2 == 1
@@ -549,16 +546,9 @@ def _build_html(data: dict) -> str:
         val_style = _TD_ALT_STYLE if is_alt else _TD_STYLE
 
         label_cell = f"<td style='{label_style}'>{label}</td>"
-
-        if key == "active_members_snapshot":
-            # Same snapshot value repeated across all days for reference
-            value_cells = "".join(
-                f"<td style='{val_style}'>{active_snapshot}</td>" for _ in days
-            )
-        else:
-            value_cells = "".join(
-                f"<td style='{val_style}'>{d[key]}</td>" for d in days
-            )
+        value_cells = "".join(
+            f"<td style='{val_style}'>{d[key]}</td>" for d in days
+        )
 
         body_rows.append(f"<tr>{label_cell}{value_cells}</tr>")
 
@@ -660,6 +650,13 @@ def _build_html(data: dict) -> str:
     <p style="margin-top: 4px; color: #666;">
       <strong>Date:</strong> {data["report_date"]} &nbsp;|&nbsp;
       <strong>Pending Approvals:</strong> {data["pending_approvals"]}
+    </p>
+    {divider}
+    <p style="margin: 0; color: #666; font-size: 0.9em;">
+      Nucleus {data["app_version"]} &nbsp;|&nbsp;
+      <a href="https://github.com/SpiritualMachines/nucleus/blob/main/USER_MANUAL.md" style="color: #3a5aa0;">User Manual</a>
+      &nbsp;|&nbsp;
+      <a href="https://github.com/SpiritualMachines/nucleus/blob/main/CHANGELOG.md" style="color: #3a5aa0;">Changelog</a>
     </p>
     {divider}
     <h3 style="border-bottom: 2px solid #333; padding-bottom: 4px;">

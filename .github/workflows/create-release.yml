@@ -15,9 +15,12 @@ on:
   workflow_dispatch:
     inputs:
       version:
-        description: 'Version tag to release (e.g., v0.9.72)'
+        description: 'Version tag to release (e.g., v0.9.8)'
         required: true
         type: string
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: 'true'
 
 jobs:
   release:
@@ -42,23 +45,24 @@ jobs:
       - name: Extract release notes for this version
         id: notes
         run: |
-          # Pull the changelog block that starts with the pushed tag version.
-          # Captures everything between the matching ## [vX.Y.Z] heading and
-          # the next ## heading (exclusive), stripping leading/trailing blank lines.
           TAG="${{ steps.version.outputs.tag }}"
-          VERSION="${TAG#v}"  # strip leading 'v' for matching [0.9.8] style entries
+          VERSION="${TAG#v}"
           NOTES=$(awk "/^## \[${VERSION}\]/{found=1; next} found && /^## /{exit} found{print}" CHANGELOG.md \
                   | sed '/./,$!d' | sed -e :a -e '/^\n*$/{$d;N;ba}')
           if [ -z "$NOTES" ]; then
             NOTES="See CHANGELOG.md for details."
           fi
-          # Write to a temp file to handle multi-line content safely
           echo "$NOTES" > /tmp/release_notes.md
 
       - name: Create GitHub Release
         run: |
-          gh release create "${{ steps.version.outputs.tag }}" \
-            --title "${{ steps.version.outputs.tag }}" \
-            --notes-file /tmp/release_notes.md
+          TAG="${{ steps.version.outputs.tag }}"
+          if gh release view "$TAG" > /dev/null 2>&1; then
+            echo "Release $TAG already exists, skipping."
+          else
+            gh release create "$TAG" \
+              --title "$TAG" \
+              --notes-file /tmp/release_notes.md
+          fi
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

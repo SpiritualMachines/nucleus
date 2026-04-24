@@ -72,6 +72,12 @@ class SettingsScreen(Widget):
         width: 1fr;
         height: 100%;
     }
+
+    /* Each settings panel must fill the ContentSwitcher height so it scrolls
+       internally and does not cause the outer container to also scroll. */
+    #settings_content > VerticalScroll {
+        height: 1fr;
+    }
     """
 
     # Track selected tier rows for the Product Categories settings panel
@@ -247,13 +253,6 @@ class SettingsScreen(Widget):
                         ],
                         id="setting_app_theme",
                         value=services.get_setting("app_theme", "nord"),
-                    )
-
-                    yield Label("Default Export Format:")
-                    yield Select(
-                        [("CSV", "csv"), ("PDF", "pdf")],
-                        id="setting_default_export",
-                        value=services.get_setting("default_export_format", "csv"),
                     )
 
                     yield Label(
@@ -1031,9 +1030,6 @@ class SettingsScreen(Widget):
             ascii_logo = self.query_one("#setting_ascii_logo", TextArea).text
             currency_name = self.query_one("#setting_currency_name").value.strip()
             app_theme = self.query_one("#setting_app_theme", Select).value or "nord"
-            default_export = (
-                self.query_one("#setting_default_export", Select).value or "csv"
-            )
             report_header = self.query_one("#setting_report_header").value.strip()
             staff_email = self.query_one("#setting_staff_email").value.strip()
 
@@ -1045,11 +1041,6 @@ class SettingsScreen(Widget):
                 return
             if not currency_name:
                 self.app.notify("Currency Name cannot be empty.", severity="error")
-                return
-            if default_export not in ("csv", "pdf"):
-                self.app.notify(
-                    "Default Export Format must be csv or pdf.", severity="error"
-                )
                 return
             if staff_email:
                 try:
@@ -1069,7 +1060,6 @@ class SettingsScreen(Widget):
             services.set_setting("ascii_logo", ascii_logo)
             services.set_setting("app_currency_name", currency_name)
             services.set_setting("app_theme", app_theme)
-            services.set_setting("default_export_format", default_export)
             services.set_setting("report_header_text", report_header)
             services.set_setting("staff_email", staff_email)
             self.app.title = hackspace_name

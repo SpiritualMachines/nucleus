@@ -3,7 +3,7 @@ from functools import partial
 
 from textual import events
 from textual.app import ComposeResult
-from textual.containers import Center, Horizontal, Vertical
+from textual.containers import Center, Horizontal, Vertical, VerticalScroll
 from textual.screen import Screen
 from textual.widgets import (
     Button,
@@ -285,45 +285,46 @@ class Dashboard(Screen, POSMixin, MembersMixin, StorageMixin):
 
     def _compose_reports_tab(self) -> ComposeResult:
         """Yields widgets for the Reports tab."""
-        yield Label("Membership Reports", classes="title")
-        yield Label("(Click any row to Manage User)", classes="subtitle")
+        with VerticalScroll(id="reports-tab-container"):
+            yield Label("Membership Reports", classes="title")
+            yield Label("(Click any row to Manage User)", classes="subtitle")
 
-        yield Label("Filter by role:", classes="subtitle")
-        with Horizontal(classes="filter-row"):
-            yield Checkbox("Admin", value=True, id="chk_admin")
-            yield Checkbox("Staff", value=True, id="chk_staff")
-            yield Checkbox("Member (Active)", value=True, id="chk_member")
-            yield Checkbox("Community (Inactive)", value=False, id="chk_community")
-            yield Checkbox("Signed In", value=False, id="chk_signed_in")
+            yield Label("Filter by role:", classes="subtitle")
+            with Horizontal(classes="filter-row"):
+                yield Checkbox("Admin", value=True, id="chk_admin")
+                yield Checkbox("Staff", value=True, id="chk_staff")
+                yield Checkbox("Member (Active)", value=True, id="chk_member")
+                yield Checkbox("Community (Inactive)", value=False, id="chk_community")
+                yield Checkbox("Signed In", value=False, id="chk_signed_in")
 
-        yield Button("Refresh Report", id="load_members")
-        yield DataTable(id="members_table")
+            yield Button("Refresh Report", id="load_members")
+            yield DataTable(id="members_table")
 
-        yield Label("Export Options:", classes="subtitle")
-        yield Button("Export CSV", id="btn_export_members_csv")
-        yield Button("Export PDF", id="btn_export_members_pdf")
+            yield Label("Export Options:", classes="subtitle")
+            yield Button("Export CSV", id="btn_export_members_csv")
+            yield Button("Export PDF", id="btn_export_members_pdf")
 
-        yield Label("Admin and Statistics Reports:", classes="subtitle")
-        yield Button(
-            "Export Period Transaction Report",
-            id="btn_period_transaction_report",
-        )
-        yield Button(
-            "Export Period User Activity Report",
-            id="btn_period_traction_report",
-        )
-        yield Button(
-            "Export Community Contacts Report",
-            id="btn_community_contacts_report",
-        )
-        yield Button(
-            "Export Everything People CSV Report",
-            id="btn_everything_people_csv",
-        )
-        yield Button(
-            "Export Products / Services Sales Report",
-            id="btn_product_sales_report",
-        )
+            yield Label("Admin and Statistics Reports:", classes="subtitle")
+            yield Button(
+                "Export Period Transaction Report",
+                id="btn_period_transaction_report",
+            )
+            yield Button(
+                "Export Period User Activity Report",
+                id="btn_period_traction_report",
+            )
+            yield Button(
+                "Export Community Contacts Report",
+                id="btn_community_contacts_report",
+            )
+            yield Button(
+                "Export Everything People CSV Report",
+                id="btn_everything_people_csv",
+            )
+            yield Button(
+                "Export Products / Services Sales Report",
+                id="btn_product_sales_report",
+            )
 
     def _compose_database_tab(self) -> ComposeResult:
         """Yields widgets for the Database tab."""

@@ -259,7 +259,7 @@ class ManualPDF(FPDF):
 
         self.set_font("LiberationSans", "", 9)
         self.set_text_color(*LIGHT)
-        self.cell(0, 5, f"v0.9.8   |   {datetime.now().strftime('%B %Y')}   |   Licensed under AGPLv3", align="C")
+        self.cell(0, 5, f"v0.9.81   |   {datetime.now().strftime('%B %Y')}   |   Licensed under AGPLv3", align="C")
 
         # Bottom accent bar
         self.set_fill_color(*ACCENT)

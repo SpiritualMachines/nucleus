@@ -756,16 +756,16 @@ def build_daily_report_data() -> dict:
     window_start = datetime.combine(day_dates[0], datetime.min.time())
 
     with Session(engine) as session:
-        # Current snapshot totals — not per-day metrics
-        active_count = (
-            session.exec(
-                select(func.count(User.account_number)).where(
-                    or_(User.role == UserRole.MEMBER, User.role == "member"),
-                    User.is_active.is_(True),
-                )
-            ).one()
-            or 0
-        )
+        # Fetch memberships that overlap the 7-day window. For each day D we count
+        # distinct members with start_date <= D <= end_date, which correctly handles
+        # both new activations and mid-window expiries without needing a role history.
+        window_end = datetime.combine(today, datetime.max.time())
+        all_memberships_raw = session.exec(
+            select(ActiveMembership).where(
+                ActiveMembership.end_date >= window_start,
+                ActiveMembership.start_date <= window_end,
+            )
+        ).all()
 
         pending_count = (
             session.exec(
@@ -845,6 +845,20 @@ def build_daily_report_data() -> dict:
         )
 
     # --- Bucket records by calendar date ---
+
+    # For each day, count distinct members who held an active membership on that date.
+    # Using start_date/end_date from ActiveMembership is accurate in both directions:
+    # members who hadn't joined yet are excluded, and members whose membership expired
+    # mid-window are excluded for days after their end_date.
+    am_by_day: dict = {
+        d: len({
+            m.user_account_number
+            for m in all_memberships_raw
+            if m.start_date.date() <= d <= m.end_date.date()
+        })
+        for d in day_dates
+    }
+
     nm_by_day: dict = defaultdict(int)
     for u in new_members_raw:
         if u.joined_date:
@@ -881,6 +895,7 @@ def build_daily_report_data() -> dict:
     days = [
         {
             "date_label": d.strftime("%a %b %d"),
+            "active_members_snapshot": am_by_day[d],
             "new_members": nm_by_day[d],
             "memberships_expiring": ex_by_day[d],
             "sign_ins": si_by_day[d],
@@ -937,7 +952,8 @@ def build_daily_report_data() -> dict:
     return {
         "hackspace_name": get_setting("hackspace_name", "Hackspace"),
         "report_date": today.strftime("%B %d, %Y"),
-        "total_active_members": int(active_count),
+        "app_version": get_setting("app_version", "v0.9.8"),
+        "total_active_members": am_by_day[today],
         "pending_approvals": int(pending_count),
         "days": days,
         "community_contacts_detail": community_contacts_detail,
